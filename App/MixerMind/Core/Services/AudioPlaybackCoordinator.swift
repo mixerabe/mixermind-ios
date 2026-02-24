@@ -21,6 +21,8 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
     private(set) var elapsedTime: TimeInterval = 0
     private(set) var duration: TimeInterval = 0
     private(set) var queue: [AudioTrack] = []
+    private(set) var isMuted = false
+    var isLooping = false
 
     var currentTrack: AudioTrack? {
         guard !queue.isEmpty, queue.indices.contains(currentTrackIndex) else { return nil }
@@ -42,15 +44,15 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
     // MARK: - Queue from Mixes
 
     /// Extracts the playable audio URL from a Mix based on its type.
-    /// Returns nil for mix types that have no audio (e.g. photo-only, embed).
+    /// Every mix should have audio (silence placeholder at minimum via audioUrl).
     static func audioURL(for mix: Mix) -> URL? {
         let urlString: String? = switch mix.type {
         case .audio:       mix.audioUrl
-        case .video:       mix.videoUrl
-        case .`import`:    mix.importAudioUrl ?? mix.importMediaUrl
-        case .text:        mix.ttsAudioUrl
-        case .photo:       nil
-        case .embed:       nil
+        case .video:       mix.audioUrl
+        case .`import`:    mix.importAudioUrl ?? mix.audioUrl
+        case .text:        mix.ttsAudioUrl ?? mix.audioUrl
+        case .photo:       mix.audioUrl
+        case .embed:       mix.audioUrl
         }
         guard let urlString, let url = URL(string: urlString) else { return nil }
         return url
@@ -70,13 +72,25 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// Load a queue from mixes and start playing from a given index.
-    func playMixes(_ mixes: [Mix], startingAt index: Int = 0) {
+    /// Build a queue from mixes without auto-playing. Call play() separately.
+    func loadQueue(_ mixes: [Mix], startingAt mixId: UUID? = nil) {
         let tracks = Self.tracks(from: mixes)
         guard !tracks.isEmpty else { return }
         queue = tracks
-        currentTrackIndex = min(index, tracks.count - 1)
-        startPlayback()
+
+        if let mixId, let idx = tracks.firstIndex(where: { $0.id == mixId.uuidString }) {
+            currentTrackIndex = idx
+        } else {
+            currentTrackIndex = 0
+        }
+
+        // Reset state without starting playback
+        player?.stop()
+        player = nil
+        stopTimer()
+        isPlaying = false
+        elapsedTime = 0
+        duration = 0
     }
 
     // MARK: - Init
@@ -273,6 +287,20 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
         updateNowPlayingElapsed()
     }
 
+    /// Jump to a track by its ID (mix UUID string). Starts playback if found.
+    func jumpToTrack(id: String) {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
+        guard idx != currentTrackIndex else { return }
+        currentTrackIndex = idx
+        startPlayback()
+    }
+
+    /// Set mute state and update player volume.
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
+        player?.volume = muted ? 0 : 1
+    }
+
     // MARK: - Internal Playback
 
     private func startPlayback() {
@@ -286,6 +314,7 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
         do {
             let audioPlayer = try AVAudioPlayer(contentsOf: track.url)
             audioPlayer.delegate = self
+            audioPlayer.volume = isMuted ? 0 : 1
             audioPlayer.prepareToPlay()
 
             self.player = audioPlayer
@@ -324,7 +353,11 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
             if flag {
-                self.next()
+                if self.isLooping {
+                    self.startPlayback()
+                } else {
+                    self.next()
+                }
             } else {
                 self.isPlaying = false
                 self.stopTimer()

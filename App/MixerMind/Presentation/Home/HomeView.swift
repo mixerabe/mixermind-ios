@@ -274,12 +274,6 @@ extension HomeView {
 
     private var settingsMenu: some View {
         Menu {
-            Button {
-                audioCoordinator.playMixes(viewModel.displayedMixes)
-            } label: {
-                Label("Play All", systemImage: "play.fill")
-            }
-            Divider()
             Button("Disconnect", role: .destructive) {
                 viewModel.showDisconnectAlert = true
             }

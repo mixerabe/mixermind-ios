@@ -3,59 +3,29 @@ import SwiftData
 import AVFoundation
 
 @Observable @MainActor
-final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
+final class MixViewerViewModel {
     var mixes: [Mix]
     var scrolledID: UUID?
-    private var activeID: UUID?
+    private(set) var activeID: UUID?
 
-    var isMuted = false
-    var isPaused = false
     var isScrubbing = false
-    var playbackProgress: Double = 0
     var tagsForCurrentMix: [Tag] = []
     var allTags: [Tag] = []
     var isAutoScroll = false
 
     var videoPlayer: AVPlayer?
-    private var audioPlayer: AVAudioPlayer?
+    var videoProgress: Double = 0
     private var loopObserver: Any?
     private var timeObserver: Any?
-    private var progressTimer: Timer?
     var pendingLoad = false
+
+    let coordinator: AudioPlaybackCoordinator = resolve()
 
     var currentMix: Mix {
         mixes.first { $0.id == activeID } ?? mixes.first!
     }
 
     var hasPlayback: Bool { true }
-
-    var currentDuration: TimeInterval {
-        if let audio = audioPlayer, audio.duration > 0 {
-            return audio.duration
-        }
-        if let item = videoPlayer?.currentItem,
-           item.duration.seconds.isFinite, item.duration.seconds > 0 {
-            return item.duration.seconds
-        }
-        return 0
-    }
-
-    private var hasRealMedia: Bool {
-        switch currentMix.type {
-        case .video, .import:
-            return true
-        case .audio:
-            return currentMix.audioUrl != nil
-        case .text:
-            return currentMix.ttsAudioUrl != nil
-        case .photo, .embed:
-            return false
-        }
-    }
-
-    private static let fallbackDuration: TimeInterval = 15
-    private var fallbackTimer: Timer?
-    private var fallbackPausedElapsed: TimeInterval = 0
 
     init(mixes: [Mix], startIndex: Int) {
         self.mixes = mixes
@@ -64,48 +34,38 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
             self.scrolledID = id
             self.activeID = id
         }
-        super.init()
     }
 
     // MARK: - Lifecycle
 
     func onAppear() {
         guard !mixes.isEmpty else { return }
-        configureAudioSession()
+        coordinator.loadQueue(mixes, startingAt: activeID)
+        coordinator.isLooping = !isAutoScroll
+        coordinator.play()
         loadCurrentMix()
     }
 
     func onDisappear() {
-        stopAllPlayback()
+        stopVideoPlayback()
     }
 
     func onScrollChanged() {
         guard let scrolledID, scrolledID != activeID else { return }
-        stopAllPlayback()
+        stopVideoPlayback()
         activeID = scrolledID
-        isMuted = false
-        isPaused = false
-        playbackProgress = 0
-        fallbackPausedElapsed = 0
+        videoProgress = 0
         pendingLoad = true
     }
 
     func onScrollIdle() {
         guard pendingLoad else { return }
         pendingLoad = false
+        coordinator.jumpToTrack(id: activeID?.uuidString ?? "")
         loadCurrentMix()
     }
 
-    private func configureAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(
-            .playback,
-            mode: .default,
-            options: [.mixWithOthers]
-        )
-        try? AVAudioSession.sharedInstance().setActive(true)
-    }
-
-    // MARK: - Load Mix
+    // MARK: - Load Mix (video only)
 
     func reloadCurrentMix() {
         loadCurrentMix()
@@ -125,26 +85,9 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
             if let urlString = mix.importMediaUrl, let url = URL(string: urlString) {
                 startVideoPlayback(url: url)
             }
-            if let urlString = mix.importAudioUrl, let url = URL(string: urlString) {
-                loadAudioFromURL(url)
-            }
 
-        case .audio:
-            if let urlString = mix.audioUrl, let url = URL(string: urlString) {
-                loadAudioFromURL(url)
-            }
-
-        case .text:
-            if let urlString = mix.ttsAudioUrl, let url = URL(string: urlString) {
-                loadAudioFromURL(url)
-            }
-
-        case .photo, .embed:
+        case .audio, .text, .photo, .embed:
             break
-        }
-
-        if !hasRealMedia {
-            startFallbackTimer()
         }
     }
 
@@ -154,9 +97,8 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         stopVideoPlayback()
 
         let player = AVPlayer(url: url)
-        player.volume = 1.0
-        let hasSeparateAudio = currentMix.importAudioUrl != nil
-        player.isMuted = isMuted || hasSeparateAudio
+        player.volume = 0 // Video is always muted — coordinator handles audio
+        player.isMuted = true
         videoPlayer = player
 
         loopObserver = NotificationCenter.default.addObserver(
@@ -167,11 +109,10 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
             Task { @MainActor in
                 guard let self else { return }
                 if self.isAutoScroll {
-                    self.advanceToNext()
+                    // Coordinator handles track advance; this is just for the video
                 } else {
                     player?.seek(to: .zero)
                     player?.play()
-                    self.onVideoLooped()
                 }
             }
         }
@@ -182,7 +123,7 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
                 guard let self, !self.isScrubbing,
                       let duration = self.videoPlayer?.currentItem?.duration,
                       duration.seconds.isFinite, duration.seconds > 0 else { return }
-                self.playbackProgress = time.seconds / duration.seconds
+                self.videoProgress = time.seconds / duration.seconds
             }
         }
 
@@ -202,145 +143,36 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Audio Playback
-
-    private func loadAudioFromURL(_ url: URL) {
-        Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                startAudioPlayback(from: data)
-            } catch {}
-        }
-    }
-
-    private func startAudioPlayback(from data: Data) {
-        stopAudioPlayback()
-
-        do {
-            let player = try AVAudioPlayer(data: data)
-            player.volume = isMuted ? 0 : 1
-
-            if videoPlayer != nil {
-                player.numberOfLoops = 0
-            } else {
-                player.numberOfLoops = isAutoScroll ? 0 : -1
-                startAudioProgressTimer()
-            }
-
-            player.prepareToPlay()
-            player.play()
-            audioPlayer = player
-        } catch {}
-    }
-
-    private func onVideoLooped() {
-        guard currentMix.importAudioUrl != nil else { return }
-        audioPlayer?.currentTime = 0
-        audioPlayer?.play()
-    }
-
-    private func startAudioProgressTimer() {
-        progressTimer?.invalidate()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, !self.isScrubbing,
-                      let player = self.audioPlayer,
-                      player.duration > 0 else { return }
-                let progress = player.currentTime / player.duration
-                self.playbackProgress = progress
-                // Standalone audio finished — advance if auto-scroll
-                if self.isAutoScroll, !player.isPlaying, progress >= 0.95 {
-                    self.advanceToNext()
-                }
-            }
-        }
-    }
-
-    private func stopAudioPlayback() {
-        progressTimer?.invalidate()
-        progressTimer = nil
-        audioPlayer?.stop()
-        audioPlayer = nil
-    }
-
-    // MARK: - Fallback Timer (15s for text/photo/embed mixes)
-
-    private var fallbackStartDate: Date?
-
-    private func startFallbackTimer() {
-        stopFallbackTimer()
-        fallbackStartDate = Date()
-        fallbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, !self.isScrubbing, !self.isPaused,
-                      let start = self.fallbackStartDate else { return }
-                let elapsed = Date().timeIntervalSince(start)
-                let progress = elapsed / Self.fallbackDuration
-                if progress >= 1 {
-                    if self.isAutoScroll {
-                        self.advanceToNext()
-                    } else {
-                        self.fallbackStartDate = Date()
-                        self.playbackProgress = 0
-                    }
-                } else {
-                    self.playbackProgress = progress
-                }
-            }
-        }
-    }
-
-    private func stopFallbackTimer() {
-        fallbackTimer?.invalidate()
-        fallbackTimer = nil
-        fallbackStartDate = nil
-    }
-
-    // MARK: - Controls
-
-    func toggleMute() {
-        isMuted.toggle()
-        audioPlayer?.volume = isMuted ? 0 : 1
-        let hasSeparateAudio = currentMix.importAudioUrl != nil
-        videoPlayer?.isMuted = isMuted || hasSeparateAudio
-    }
+    // MARK: - Controls (delegate to coordinator)
 
     func togglePause() {
-        isPaused.toggle()
-        if isPaused {
-            videoPlayer?.pause()
-            audioPlayer?.pause()
-            if let start = fallbackStartDate {
-                fallbackPausedElapsed = Date().timeIntervalSince(start)
-                fallbackTimer?.invalidate()
-                fallbackTimer = nil
-            }
-        } else {
+        coordinator.togglePlayPause()
+        if coordinator.isPlaying {
             videoPlayer?.play()
-            audioPlayer?.play()
-            if fallbackPausedElapsed > 0, !hasRealMedia {
-                fallbackStartDate = Date().addingTimeInterval(-fallbackPausedElapsed)
-                fallbackPausedElapsed = 0
-                startFallbackTimer()
-            }
+        } else {
+            videoPlayer?.pause()
         }
     }
 
-    // MARK: - Scrubbing
-
-    private var wasPlayingBeforeScrub = false
+    func toggleMute() {
+        coordinator.setMuted(!coordinator.isMuted)
+    }
 
     func beginScrub() {
         isScrubbing = true
-        wasPlayingBeforeScrub = !isPaused
+        coordinator.pause()
         videoPlayer?.pause()
-        audioPlayer?.pause()
     }
 
     func scrub(to progress: Double) {
         let clamped = min(max(progress, 0), 1)
-        playbackProgress = clamped
 
+        // Seek coordinator audio
+        if coordinator.duration > 0 {
+            coordinator.seek(to: clamped * coordinator.duration)
+        }
+
+        // Seek video
         if let player = videoPlayer,
            let duration = player.currentItem?.duration,
            duration.seconds.isFinite, duration.seconds > 0 {
@@ -348,33 +180,44 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
             player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
         }
 
-        if let audio = audioPlayer, audio.duration > 0 {
-            audio.currentTime = clamped * audio.duration
-        }
+        videoProgress = clamped
     }
 
     func endScrub() {
         isScrubbing = false
-        if wasPlayingBeforeScrub {
-            videoPlayer?.play()
-            audioPlayer?.play()
-            if !hasRealMedia {
-                let elapsed = playbackProgress * Self.fallbackDuration
-                fallbackStartDate = Date().addingTimeInterval(-elapsed)
-                startFallbackTimer()
+        coordinator.resume()
+        videoPlayer?.play()
+    }
+
+    // MARK: - Coordinator Sync
+
+    /// Called when coordinator's currentTrackIndex changes externally (lock screen, track finish).
+    /// Scrolls the viewer to match.
+    func syncFromCoordinator() {
+        guard let track = coordinator.currentTrack,
+              let mixId = UUID(uuidString: track.id),
+              mixId != activeID else { return }
+
+        if mixes.contains(where: { $0.id == mixId }) {
+            stopVideoPlayback()
+            activeID = mixId
+            videoProgress = 0
+            withAnimation {
+                scrolledID = mixId
             }
-        } else if !hasRealMedia {
-            fallbackPausedElapsed = playbackProgress * Self.fallbackDuration
+            loadCurrentMix()
         }
     }
 
-    // MARK: - Cleanup
+    // MARK: - Auto Scroll
 
-    func stopAllPlayback() {
-        stopVideoPlayback()
-        stopAudioPlayback()
-        stopFallbackTimer()
-        playbackProgress = 0
+    func advanceToNext() {
+        guard let currentIndex = mixes.firstIndex(where: { $0.id == activeID }),
+              currentIndex + 1 < mixes.count else { return }
+        let nextId = mixes[currentIndex + 1].id
+        withAnimation {
+            scrolledID = nextId
+        }
     }
 
     // MARK: - Tags
@@ -488,17 +331,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
                 tagsForCurrentMix = tags
             }
         } catch {}
-    }
-
-    // MARK: - Auto Scroll
-
-    func advanceToNext() {
-        guard let currentIndex = mixes.firstIndex(where: { $0.id == activeID }),
-              currentIndex + 1 < mixes.count else { return }
-        let nextId = mixes[currentIndex + 1].id
-        withAnimation {
-            scrolledID = nextId
-        }
     }
 
     // MARK: - Title

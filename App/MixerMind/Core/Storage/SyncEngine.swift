@@ -133,6 +133,40 @@ final class SyncEngine {
 
         // Mark as synced if all applicable media is downloaded
         local.isSynced = checkAllMediaDownloaded(local, mix: mix)
+
+        // Ensure every mix has audio — copy silent placeholder if none exists
+        populateSilencePlaceholderIfNeeded(for: local, mix: mix)
+    }
+
+    /// If this mix has no audio file after sync, copy the bundled silence placeholder
+    /// so the coordinator always has something to play.
+    private func populateSilencePlaceholderIfNeeded(for local: LocalMix, mix: Mix) {
+        let hasAudio: Bool = switch mix.type {
+        case .audio:    local.localAudioPath != nil
+        case .video:    local.localAudioPath != nil  // video uses audioUrl for separate audio track
+        case .`import`: local.localImportAudioPath != nil || local.localAudioPath != nil
+        case .text:     local.localTtsAudioPath != nil || local.localAudioPath != nil
+        case .photo:    local.localAudioPath != nil
+        case .embed:    local.localAudioPath != nil
+        }
+
+        guard !hasAudio else { return }
+        guard let bundleURL = Bundle.main.url(forResource: "silence_10s", withExtension: "mp3") else { return }
+
+        let relativePath = "\(local.mixId.uuidString)/silence.mp3"
+        let destination = fileManager.fileURL(for: relativePath)
+
+        // Create parent directory if needed
+        let parent = destination.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: parent.path) {
+            try? FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        }
+
+        if !FileManager.default.fileExists(atPath: destination.path) {
+            try? FileManager.default.copyItem(at: bundleURL, to: destination)
+        }
+
+        local.localAudioPath = relativePath
     }
 
     private func checkAllMediaDownloaded(_ local: LocalMix, mix: Mix) -> Bool {

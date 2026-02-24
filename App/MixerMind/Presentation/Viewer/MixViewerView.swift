@@ -7,6 +7,8 @@ struct MixViewerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
+    private let coordinator: AudioPlaybackCoordinator = resolve()
+
     var onDeleted: ((UUID) -> Void)?
 
     init(mixes: [Mix], startIndex: Int, onDeleted: ((UUID) -> Void)? = nil) {
@@ -57,6 +59,12 @@ struct MixViewerView: View {
         }
         .onChange(of: viewModel.scrolledID) { _, _ in
             viewModel.onScrollChanged()
+        }
+        .onChange(of: coordinator.currentTrackIndex) { _, _ in
+            viewModel.syncFromCoordinator()
+        }
+        .onChange(of: viewModel.isAutoScroll) { _, newValue in
+            coordinator.isLooping = !newValue
         }
         .alert("Delete this mix?", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) {}
@@ -178,6 +186,7 @@ struct MixViewerView: View {
 
     private func canvasForMix(_ mix: Mix) -> some View {
         let isCurrent = mix.id == viewModel.currentMix.id
+        let hasVideo = viewModel.videoPlayer != nil
 
         let mediaUrl: String? = {
             switch mix.type {
@@ -211,19 +220,37 @@ struct MixViewerView: View {
                     UIApplication.shared.open(url)
                 }
             },
-            isPaused: Binding(get: { viewModel.isPaused }, set: { viewModel.isPaused = $0 }),
-            isMuted: Binding(get: { viewModel.isMuted }, set: { viewModel.isMuted = $0 }),
-            isScrubbing: Binding(get: { viewModel.isScrubbing }, set: { viewModel.isScrubbing = $0 }),
-            playbackProgress: Binding(get: { viewModel.playbackProgress }, set: { viewModel.playbackProgress = $0 }),
+            isPaused: Binding(
+                get: { isCurrent ? !coordinator.isPlaying : true },
+                set: { _ in }
+            ),
+            isMuted: Binding(
+                get: { isCurrent ? coordinator.isMuted : false },
+                set: { _ in }
+            ),
+            isScrubbing: Binding(
+                get: { viewModel.isScrubbing },
+                set: { viewModel.isScrubbing = $0 }
+            ),
+            playbackProgress: Binding(
+                get: {
+                    guard isCurrent else { return 0 }
+                    if hasVideo { return viewModel.videoProgress }
+                    return coordinator.progress
+                },
+                set: { viewModel.scrub(to: $0) }
+            ),
             hasPlayback: isCurrent ? viewModel.hasPlayback : false,
-            playbackDuration: isCurrent ? viewModel.currentDuration : 0,
+            playbackDuration: isCurrent ? (hasVideo
+                ? (viewModel.videoPlayer?.currentItem?.duration.seconds ?? 0)
+                : coordinator.duration) : 0,
             onTogglePause: { viewModel.togglePause() },
             onToggleMute: { viewModel.toggleMute() },
             onBeginScrub: { viewModel.beginScrub() },
             onScrub: { viewModel.scrub(to: $0) },
             onEndScrub: { viewModel.endScrub() },
             onCanvasTap: {
-                if viewModel.hasPlayback, !viewModel.isPaused {
+                if viewModel.hasPlayback, coordinator.isPlaying {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         viewModel.togglePause()
                     }
