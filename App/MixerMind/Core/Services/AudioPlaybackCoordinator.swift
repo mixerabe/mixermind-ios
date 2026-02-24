@@ -116,6 +116,8 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
     }
 
     private func activateSession() {
+        // Re-assert category in case another view changed it (e.g. .mixWithOthers)
+        configureAudioSession()
         do {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {

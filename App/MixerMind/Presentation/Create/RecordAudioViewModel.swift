@@ -74,7 +74,7 @@ final class RecordAudioViewModel {
     }
 
     private func restoreSessionForPlayback() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
         try? AVAudioSession.sharedInstance().setActive(true)
     }
 

@@ -131,7 +131,7 @@ final class CreateMixViewModel {
         try? AVAudioSession.sharedInstance().setCategory(
             .playback,
             mode: .default,
-            options: [.mixWithOthers]
+            options: []
         )
         try? AVAudioSession.sharedInstance().setActive(true)
     }
