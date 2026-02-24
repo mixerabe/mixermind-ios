@@ -7,7 +7,6 @@ import UniformTypeIdentifiers
 final class CreateMixViewModel {
     var mixType: MixType = .text
 
-    var caption: String = ""
     var textContent: String = ""
 
     // Photo state
@@ -122,7 +121,6 @@ final class CreateMixViewModel {
     init(editing mix: Mix, skipPlayback: Bool = false) {
         self.editingMixId = mix.id
         self.mixType = mix.type
-        self.caption = mix.caption ?? ""
         self.textContent = mix.textContent ?? ""
         self.embedUrl = mix.embedUrl ?? ""
         self.embedOg = mix.embedOg
@@ -364,6 +362,9 @@ final class CreateMixViewModel {
         appleMusicTitle = title
         appleMusicArtist = artist
         appleMusicArtworkUrl = artworkUrl
+
+        // Auto-generate title: "Artist -- Song" (capped at 50 chars)
+        self.title = String("\(artist) -- \(title)".prefix(50))
 
         if let artworkUrl, let url = URL(string: artworkUrl) {
             Task {
@@ -655,6 +656,17 @@ final class CreateMixViewModel {
             embedOg = OGMetadata(title: nil, description: nil, imageUrl: nil, host: URL(string: normalized)?.host ?? normalized)
         }
         isFetchingOG = false
+
+        // Auto-generate title: "Host -- Page Title" (capped at 50 chars)
+        let ogTitle = embedOg?.title
+        let host = embedOg?.host
+        if let ogTitle, !ogTitle.isEmpty, let host, !host.isEmpty {
+            title = String("\(host) -- \(ogTitle)".prefix(50))
+        } else if let ogTitle, !ogTitle.isEmpty {
+            title = String(ogTitle.prefix(50))
+        } else if let host, !host.isEmpty {
+            title = host
+        }
     }
 
     // MARK: - Clear
@@ -664,7 +676,6 @@ final class CreateMixViewModel {
         stopAudioPlayback()
         isPaused = false
         playbackProgress = 0
-        caption = ""
         textContent = ""
         embedUrl = ""
         embedOg = nil
@@ -838,8 +849,6 @@ final class CreateMixViewModel {
         errorMessage = nil
         do {
             var payload = CreateMixPayload(type: mixType)
-            let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-            payload.caption = trimmedCaption.isEmpty ? nil : trimmedCaption
 
             switch mixType {
             case .text:
@@ -928,6 +937,46 @@ final class CreateMixViewModel {
                 payload.appleMusicArtworkUrl = appleMusicArtworkUrl
             }
 
+            // Generate searchable content (non-fatal)
+            do {
+                switch mixType {
+                case .text:
+                    if hasText {
+                        payload.content = ContentService.fromText(textContent)
+                    }
+                case .photo:
+                    if let data = photoData {
+                        payload.content = try await ContentService.fromImage(imageData: data)
+                    }
+                case .video:
+                    // Audio transcription of video — extract audio track first
+                    if let data = videoData {
+                        let audioTrack = try await extractAudioFromVideo(data: data)
+                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "video_audio.m4a")
+                    }
+                case .import:
+                    // Prefer import audio if available, otherwise extract from video
+                    if let data = importAudioData {
+                        payload.content = try await ContentService.fromAudio(data: data, fileName: "import_audio.m4a")
+                    } else if let data = importMediaData {
+                        let audioTrack = try await extractAudioFromVideo(data: data)
+                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "import_audio.m4a")
+                    }
+                case .audio:
+                    if let data = audioData, !isAudioFromTTS {
+                        let name = audioFileName ?? "audio.m4a"
+                        let ct = name.hasSuffix(".mp3") ? "audio/mpeg" : "audio/m4a"
+                        payload.content = try await ContentService.fromAudio(data: data, fileName: name, contentType: ct)
+                    }
+                case .embed:
+                    payload.content = ContentService.fromEmbed(og: embedOg, url: embedUrl)
+                case .appleMusic:
+                    payload.content = ContentService.fromAppleMusic(title: appleMusicTitle, artist: appleMusicArtist)
+                }
+            } catch {
+                // Content generation failed — continue saving without content
+            }
+
             // Auto-generate title (non-fatal)
             let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedTitle.isEmpty {
@@ -981,8 +1030,6 @@ final class CreateMixViewModel {
 
         do {
             var payload = UpdateMixPayload()
-            let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-            payload.caption = trimmedCaption.isEmpty ? nil : trimmedCaption
 
             switch mixType {
             case .text:
@@ -1044,6 +1091,44 @@ final class CreateMixViewModel {
                 payload.appleMusicTitle = appleMusicTitle
                 payload.appleMusicArtist = appleMusicArtist
                 payload.appleMusicArtworkUrl = appleMusicArtworkUrl
+            }
+
+            // Regenerate searchable content (non-fatal)
+            do {
+                switch mixType {
+                case .text:
+                    if hasText {
+                        payload.content = ContentService.fromText(textContent)
+                    }
+                case .photo:
+                    if let data = photoData {
+                        payload.content = try await ContentService.fromImage(imageData: data)
+                    }
+                case .video:
+                    if let data = videoData {
+                        let audioTrack = try await extractAudioFromVideo(data: data)
+                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "video_audio.m4a")
+                    }
+                case .import:
+                    if let data = importAudioData {
+                        payload.content = try await ContentService.fromAudio(data: data, fileName: "import_audio.m4a")
+                    } else if let data = importMediaData {
+                        let audioTrack = try await extractAudioFromVideo(data: data)
+                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "import_audio.m4a")
+                    }
+                case .audio:
+                    if let data = audioData, !isAudioFromTTS {
+                        let name = audioFileName ?? "audio.m4a"
+                        let ct = name.hasSuffix(".mp3") ? "audio/mpeg" : "audio/m4a"
+                        payload.content = try await ContentService.fromAudio(data: data, fileName: name, contentType: ct)
+                    }
+                case .embed:
+                    payload.content = ContentService.fromEmbed(og: embedOg, url: embedUrl)
+                case .appleMusic:
+                    payload.content = ContentService.fromAppleMusic(title: appleMusicTitle, artist: appleMusicArtist)
+                }
+            } catch {
+                // Content generation failed — continue saving without content
             }
 
             _ = try await repo.updateMix(id: mixId, payload)

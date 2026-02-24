@@ -18,11 +18,6 @@ struct MixViewerView: View {
     @State private var titleDraft = ""
     @State private var isEditingTitle = false
     @State private var wasPausedBeforeTitleEdit = false
-    @FocusState private var titleFieldFocused: Bool
-
-    // Caption editing
-    @State private var showCaptionSheet = false
-    @State private var captionDraft = ""
 
     // Tag editing
     @State private var showNewTagSheet = false
@@ -32,19 +27,21 @@ struct MixViewerView: View {
             pagingCanvas
             viewerBottomBar
         }
+        .ignoresSafeArea(.keyboard)
         .background(Color(red: 0.08, green: 0.08, blue: 0.08))
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(isEditingTitle)
         .toolbarBackground(.hidden, for: .navigationBar)
         .tint(.white)
         .toolbar {
             viewerToolbarItems
         }
-        .overlay {
-            if isEditingTitle {
-                titleEditOverlay
-            }
+        .fullScreenCover(isPresented: $isEditingTitle) {
+            TitleEditOverlayView(
+                title: $titleDraft,
+                onCommit: commitTitle
+            )
+            .interactiveDismissDisabled()
         }
         .onAppear {
             viewModel.onAppear()
@@ -69,14 +66,6 @@ struct MixViewerView: View {
                 }
             }
         }
-        .sheet(isPresented: $showCaptionSheet) {
-            CaptionEditSheet(text: $captionDraft) {
-                Task {
-                    await viewModel.saveCaption(captionDraft)
-                }
-            }
-            .presentationDetents([.medium])
-        }
     }
 
     // MARK: - Paging Canvas
@@ -86,9 +75,6 @@ struct MixViewerView: View {
             LazyVStack(spacing: 0) {
                 ForEach(Array(viewModel.mixes.enumerated()), id: \.element.id) { index, mix in
                     canvasForMix(mix)
-                        .overlay(alignment: .bottomLeading) {
-                            captionOverlay(for: mix)
-                        }
                         .containerRelativeFrame([.horizontal, .vertical])
                 }
             }
@@ -96,10 +82,10 @@ struct MixViewerView: View {
         }
         .scrollTargetBehavior(.paging)
         .scrollIndicators(.hidden)
-        .scrollPosition(id: $viewModel.scrolledID)
+        .scrollPosition(id: $viewModel.scrolledID, anchor: .top)
+        .scrollDisabled(isEditingTitle)
         .ignoresSafeArea(edges: .top)
         .ignoresSafeArea(.keyboard)
-        .scrollDismissesKeyboard(.immediately)
         .onScrollPhaseChange { _, newPhase in
             if newPhase == .idle {
                 viewModel.onScrollIdle()
@@ -107,56 +93,22 @@ struct MixViewerView: View {
         }
     }
 
-    // MARK: - Caption Overlay
-
-    @ViewBuilder
-    private func captionOverlay(for mix: Mix) -> some View {
-        let caption = mix.caption ?? ""
-        Button {
-            captionDraft = caption
-            showCaptionSheet = true
-        } label: {
-            if caption.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus")
-                        .font(.caption2.weight(.semibold))
-                    Text("Caption")
-                        .font(.caption)
-                }
-                .foregroundStyle(.white.opacity(0.5))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            } else {
-                Text(caption)
-                    .font(.subheadline)
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-            }
-        }
-        .buttonStyle(.plain)
-        .padding(.leading, 8)
-        .padding(.bottom, 28) // above progress bar
-    }
-
     // MARK: - Viewer Bottom Bar
 
     private var viewerBottomBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(viewModel.allTags) { tag in
+                ForEach(viewModel.sortedTags) { tag in
                     let isOn = viewModel.tagsForCurrentMix.contains { $0.id == tag.id }
                     Button {
                         viewModel.toggleTag(tag)
                     } label: {
                         Text("#\(tag.name)")
                             .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(isOn ? .black : .white)
                             .padding(.horizontal, 14)
                             .frame(height: 44)
-                            .background(isOn ? Color.accentColor : Color.clear, in: .capsule)
+                            .background(isOn ? Color.white : Color.clear, in: .capsule)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(in: .capsule)
@@ -191,30 +143,28 @@ struct MixViewerView: View {
 
     @ToolbarContentBuilder
     private var viewerToolbarItems: some ToolbarContent {
-        if !viewModel.mixes.isEmpty, !isEditingTitle {
+        if !viewModel.mixes.isEmpty {
             ToolbarItem(placement: .principal) {
                 titleBar
             }
-            if !isEditingTitle {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                viewModel.isAutoScroll.toggle()
-                            }
-                        } label: {
-                            Label(
-                                viewModel.isAutoScroll ? "Stop Auto-scroll" : "Auto-scroll",
-                                systemImage: viewModel.isAutoScroll ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
-                            )
-                        }
-                        Button("Delete", role: .destructive) {
-                            showDeleteAlert = true
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            viewModel.isAutoScroll.toggle()
                         }
                     } label: {
-                        Image(systemName: "ellipsis")
-                            .fontWeight(.semibold)
+                        Label(
+                            viewModel.isAutoScroll ? "Stop Auto-scroll" : "Auto-scroll",
+                            systemImage: viewModel.isAutoScroll ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
+                        )
                     }
+                    Button("Delete", role: .destructive) {
+                        showDeleteAlert = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .fontWeight(.semibold)
                 }
             }
         }
@@ -282,7 +232,7 @@ struct MixViewerView: View {
         )
     }
 
-    // MARK: - Title Bar
+    // MARK: - Title Bar (toolbar chip only — never contains a text field)
 
     private var titleBar: some View {
         Button {
@@ -302,72 +252,64 @@ struct MixViewerView: View {
         }
     }
 
-    private var titleEditOverlay: some View {
-        ZStack {
-            // Tap outside to dismiss
-            Color.black.opacity(0.01)
-                .ignoresSafeArea()
-                .onTapGesture { commitTitle() }
-
-            VStack {
-                TextField("Title", text: $titleDraft)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .focused($titleFieldFocused)
-                    .textFieldStyle(.plain)
-                    .submitLabel(.done)
-                    .onSubmit { commitTitle() }
-                    .onChange(of: titleDraft) { _, newValue in
-                        if newValue.count > 50 {
-                            titleDraft = String(newValue.prefix(50))
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(height: 44)
-                    .glassEffect(in: .capsule)
-                    .padding(.horizontal, 16)
-
-                Spacer()
-            }
-            .padding(.top, 6)
-        }
-        .transition(.opacity)
-    }
-
     private func beginTitleEdit() {
         titleDraft = viewModel.currentMix.title ?? ""
         wasPausedBeforeTitleEdit = viewModel.isPaused
-        if !viewModel.isPaused {
-            viewModel.togglePause()
-        }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            isEditingTitle = true
-        }
-        titleFieldFocused = true
+        if !viewModel.isPaused { viewModel.togglePause() }
+        isEditingTitle = true
     }
 
     private func commitTitle() {
         let text = titleDraft
-        withAnimation(.easeInOut(duration: 0.25)) {
-            isEditingTitle = false
-        }
-        titleFieldFocused = false
-        if !wasPausedBeforeTitleEdit, viewModel.isPaused {
-            viewModel.togglePause()
-        }
-        Task {
-            await viewModel.saveTitle(text)
-        }
+        isEditingTitle = false
+        if !wasPausedBeforeTitleEdit, viewModel.isPaused { viewModel.togglePause() }
+        Task { await viewModel.saveTitle(text) }
     }
 
     private func cancelTitleEdit() {
-        withAnimation(.easeInOut(duration: 0.25)) {
-            isEditingTitle = false
+        isEditingTitle = false
+        if !wasPausedBeforeTitleEdit, viewModel.isPaused { viewModel.togglePause() }
+    }
+}
+
+private struct TitleEditOverlayView: View {
+    @Binding var title: String
+    let onCommit: () -> Void
+
+    @FocusState private var titleFieldFocused: Bool
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    onCommit()
+                }
+
+            TextField("Title", text: $title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .focused($titleFieldFocused)
+                .textFieldStyle(.plain)
+                .submitLabel(.done)
+                .onSubmit {
+                    onCommit()
+                }
+                .onChange(of: title) { _, newValue in
+                    if newValue.count > 50 {
+                        title = String(newValue.prefix(50))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+                .glassEffect(in: .capsule)
+                .padding(.horizontal, 40)
+                .padding(.top, 52)
         }
-        titleFieldFocused = false
-        if !wasPausedBeforeTitleEdit, viewModel.isPaused {
-            viewModel.togglePause()
+        .ignoresSafeArea(.keyboard)
+        .onAppear {
+            titleFieldFocused = true
         }
     }
 }

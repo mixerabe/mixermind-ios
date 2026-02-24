@@ -5,39 +5,78 @@ struct MasonryMixCard: View {
 
     private static let darkBg = Color(red: 0.08, green: 0.08, blue: 0.08)
 
-    var body: some View {
-        VStack(spacing: 0) {
-            if let title = mix.title, !title.isEmpty {
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: 40)
-                    .glassEffect(in: .rect(cornerRadius: 0))
-            }
-
-            Group {
-                switch mix.type {
-                case .text:
-                    textCard
-                case .photo:
-                    photoCard
-                case .video:
-                    videoCard
-                case .import:
-                    importCard
-                case .embed:
-                    embedCard
-                case .audio:
-                    audioCard
-                case .appleMusic:
-                    appleMusicCard
-                }
+    /// Parse title around "--", "—" (em dash), or "–" (en dash) delimiter
+    private var parsedTitle: (title: String, subtitle: String?)? {
+        guard let raw = mix.title, !raw.isEmpty else { return nil }
+        // Try " -- ", " — ", " – " (with spaces), then "—", "–" (without spaces)
+        let separators = [" -- ", " \u{2014} ", " \u{2013} ", "\u{2014}", "\u{2013}"]
+        for sep in separators {
+            if let range = raw.range(of: sep) {
+                let before = String(raw[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                let after = String(raw[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                guard !before.isEmpty, !after.isEmpty else { continue }
+                return (title: after, subtitle: before)
             }
         }
+        return (title: raw, subtitle: nil)
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            switch mix.type {
+            case .text:
+                textCard
+            case .photo:
+                photoCard
+            case .video:
+                videoCard
+            case .import:
+                importCard
+            case .embed:
+                embedCard
+            case .audio:
+                audioCard
+            case .appleMusic:
+                appleMusicCard
+            }
+
+            titleSection
+        }
         .clipShape(.rect(cornerRadius: 12))
+    }
+
+    // MARK: - Title Section
+
+    @ViewBuilder
+    private var titleSection: some View {
+        if let parsed = parsedTitle {
+            // Gradient fade behind text
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.7)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: parsed.subtitle != nil ? 72 : 52)
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let subtitle = parsed.subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Text(parsed.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
     // MARK: - Text Card
@@ -152,7 +191,7 @@ struct MasonryMixCard: View {
     // MARK: - Embed Card
 
     private var embedCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        ZStack {
             if let imageUrl = mix.embedOg?.imageUrl, let url = URL(string: imageUrl) {
                 AsyncImage(url: url) { phase in
                     switch phase {
@@ -160,32 +199,15 @@ struct MasonryMixCard: View {
                         image
                             .resizable()
                             .scaledToFill()
-                            .frame(maxHeight: 120)
-                            .clipped()
                     default:
                         Color(.systemGray5)
                             .frame(height: 80)
                     }
                 }
+            } else {
+                mediaPlaceholder(icon: "link")
             }
-
-            VStack(alignment: .leading, spacing: 4) {
-                if let title = mix.embedOg?.title {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                }
-                if let host = mix.embedOg?.host {
-                    Text(host)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            .padding(10)
         }
-        .background(Color(.secondarySystemBackground))
     }
 
     // MARK: - Audio Card
@@ -216,7 +238,7 @@ struct MasonryMixCard: View {
     // MARK: - Apple Music Card
 
     private var appleMusicCard: some View {
-        VStack(spacing: 0) {
+        ZStack {
             if let artworkUrl = mix.appleMusicArtworkUrl, let url = URL(string: artworkUrl) {
                 AsyncImage(url: url) { phase in
                     switch phase {
@@ -229,28 +251,10 @@ struct MasonryMixCard: View {
                             .aspectRatio(1, contentMode: .fit)
                     }
                 }
-            }
-
-            if mix.appleMusicTitle != nil || mix.appleMusicArtist != nil {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let title = mix.appleMusicTitle {
-                        Text(title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                    }
-                    if let artist = mix.appleMusicArtist {
-                        Text(artist)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                mediaPlaceholder(icon: "music.note")
             }
         }
-        .background(Color(.secondarySystemBackground))
     }
 
     // MARK: - Helpers

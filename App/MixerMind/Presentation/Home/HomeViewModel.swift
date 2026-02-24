@@ -86,6 +86,59 @@ final class HomeViewModel {
         return Set(view.tagIds) != selectedTagIds
     }
 
+    // MARK: - Search
+
+    var searchResults: [SearchService.SearchResult] = []
+    var isSearching = false
+    var isSearchActive = false
+    private var searchTask: Task<Void, Never>?
+
+    func search(query: String) {
+        searchTask?.cancel()
+
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            searchResults = []
+            isSearching = false
+            isSearchActive = false
+            return
+        }
+
+        isSearchActive = true
+        isSearching = true
+
+        searchTask = Task {
+            // Debounce: wait 300ms before searching
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+
+            do {
+                let results = try await SearchService.search(query: trimmed)
+                guard !Task.isCancelled else { return }
+                self.searchResults = results
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.searchResults = []
+            }
+            self.isSearching = false
+        }
+    }
+
+    func clearSearch() {
+        searchTask?.cancel()
+        searchResults = []
+        isSearching = false
+        isSearchActive = false
+    }
+
+    /// Map search results to full Mix objects from the local cache for navigation
+    var searchMixes: [Mix] {
+        let idSet = Set(searchResults.map(\.id))
+        let ordered = searchResults.map(\.id)
+        let mixLookup = Dictionary(uniqueKeysWithValues: mixes.filter { idSet.contains($0.id) }.map { ($0.id, $0) })
+        return ordered.compactMap { mixLookup[$0] }
+    }
+
     private let repo: MixRepository = resolve()
     private let tagRepo: TagRepository = resolve()
     private let savedViewRepo: SavedViewRepository = resolve()
@@ -125,7 +178,6 @@ final class HomeViewModel {
     }
 
     func toggleTag(_ tagId: UUID) {
-        // Don't clear activeViewId — let it drift so "Update View" appears
         if selectedTagIds.contains(tagId) {
             selectedTagIds.remove(tagId)
             selectedTagOrder.removeAll { $0 == tagId }
@@ -133,11 +185,10 @@ final class HomeViewModel {
             selectedTagIds.insert(tagId)
             selectedTagOrder.append(tagId)
         }
-    }
-
-    func clearTagFilter() {
-        selectedTagIds.removeAll()
-        selectedTagOrder.removeAll()
+        // No tags left = back to "My Mixes"
+        if selectedTagIds.isEmpty {
+            activeViewId = nil
+        }
     }
 
     // MARK: - Saved View Operations

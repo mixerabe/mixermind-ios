@@ -5,26 +5,19 @@ struct TagBarView: View {
     let availableTags: [TagWithFrequency]
     let selectedTagIds: Set<UUID>
     var onToggle: (UUID) -> Void
-    var onClearAll: () -> Void
+
+    /// Selected tags first, then available sorted by frequency then name
+    private var allTags: [TagWithFrequency] {
+        selectedTags + availableTags.sorted {
+            $0.frequency != $1.frequency ? $0.frequency > $1.frequency : $0.name < $1.name
+        }
+    }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                // "All" chip — selected when no tags active
-                chip(label: "All", isSelected: selectedTagIds.isEmpty) {
-                    onClearAll()
-                }
-
-                // Selected tags first (so user sees what's active)
-                ForEach(selectedTags) { tagItem in
-                    chip(label: "#\(tagItem.name)", isSelected: true) {
-                        onToggle(tagItem.id)
-                    }
-                }
-
-                // Then available (unselected) tags that still produce results
-                ForEach(availableTags) { tagItem in
-                    chip(label: "#\(tagItem.name)", isSelected: false) {
+                ForEach(allTags) { tagItem in
+                    chip(label: "#\(tagItem.name)", isSelected: selectedTagIds.contains(tagItem.id)) {
                         onToggle(tagItem.id)
                     }
                 }
@@ -38,10 +31,10 @@ struct TagBarView: View {
         Button(action: action) {
             Text(label)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .foregroundStyle(isSelected ? Color.black : Color.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(isSelected ? Color.accentColor : Color.clear, in: .capsule)
+                .background(isSelected ? Color.white : Color.clear, in: .capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(in: .capsule)

@@ -3,6 +3,7 @@ import SwiftUI
 struct HomeView: View {
     @State private var viewModel = HomeViewModel()
     @State private var searchText = ""
+    @State private var isSearchMode = false
     @FocusState private var isSearchFocused: Bool
     var onDisconnect: () -> Void
 
@@ -97,14 +98,19 @@ extension HomeView {
             ProgressView()
         } else {
             VStack(spacing: 0) {
-                TagBarView(
-                    selectedTags: viewModel.selectedTags,
-                    availableTags: viewModel.availableTags,
-                    selectedTagIds: viewModel.selectedTagIds,
-                    onToggle: { tagId in viewModel.toggleTag(tagId) },
-                    onClearAll: { viewModel.clearTagFilter() }
-                )
-                mixGrid
+                if !isSearchMode {
+                    TagBarView(
+                        selectedTags: viewModel.selectedTags,
+                        availableTags: viewModel.availableTags,
+                        selectedTagIds: viewModel.selectedTagIds,
+                        onToggle: { tagId in viewModel.toggleTag(tagId) }
+                    )
+                }
+                if isSearchMode && viewModel.isSearchActive {
+                    searchResultsGrid
+                } else {
+                    mixGrid
+                }
             }
         }
     }
@@ -128,6 +134,35 @@ extension HomeView {
             await viewModel.loadMixes()
             await viewModel.loadTags()
             await viewModel.loadSavedViews()
+        }
+    }
+
+    private var searchResultsGrid: some View {
+        ScrollView {
+            if viewModel.isSearching {
+                ProgressView()
+                    .padding(.top, 40)
+            } else if viewModel.searchResults.isEmpty && !searchText.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+                    .padding(.top, 40)
+            } else {
+                let searchMixes = viewModel.searchMixes
+                MasonryLayout(columns: 2, spacing: 8) {
+                    ForEach(Array(searchMixes.enumerated()), id: \.element.id) { index, mix in
+                        MasonryMixCard(mix: mix)
+                            .onTapGesture {
+                                // Find the index in the full mixes list for the viewer
+                                if let fullIndex = viewModel.mixes.firstIndex(where: { $0.id == mix.id }) {
+                                    viewModel.navigationPath.append(.viewer(startIndex: fullIndex))
+                                }
+                            }
+                    }
+                }
+                .padding(.horizontal, 8)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomBar
         }
     }
 }
@@ -230,36 +265,54 @@ extension HomeView {
                     .focused($isSearchFocused)
                     .textFieldStyle(.plain)
                     .submitLabel(.search)
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                        isSearchFocused = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+                    .onTapGesture {
+                        isSearchMode = true
                     }
-                    .buttonStyle(.plain)
-                    .contentShape(Circle())
+                    .onChange(of: isSearchFocused) { _, focused in
+                        if focused {
+                            isSearchMode = true
+                        }
+                    }
+                    .onChange(of: searchText) { _, newValue in
+                        if !newValue.isEmpty {
+                            isSearchMode = true
+                        }
+                        viewModel.search(query: newValue)
+                    }
+                    .onSubmit {
+                        viewModel.search(query: searchText)
+                    }
+
+                Button(action: clearSearchText) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .opacity(searchText.isEmpty ? 0 : 1)
+                .allowsHitTesting(!searchText.isEmpty)
             }
+            .frame(maxWidth: .infinity, minHeight: 52, maxHeight: 52, alignment: .leading)
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
             .glassEffect(in: .capsule)
 
-            if isSearchFocused {
-                Button {
-                    isSearchFocused = false
-                } label: {
+            ZStack {
+                Button(action: closeSearchMode) {
                     Image(systemName: "xmark")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 52, height: 52)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .glassEffect(in: .circle)
-            } else {
+                .opacity(isSearchMode ? 1 : 0)
+                .allowsHitTesting(isSearchMode)
+
                 Menu {
                     Button { viewModel.navigationPath.append(.createPhoto) } label: {
                         Label("Gallery", systemImage: "photo.on.rectangle")
@@ -283,13 +336,28 @@ extension HomeView {
                     Image(systemName: "plus")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 52, height: 52)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .glassEffect(in: .circle)
+                .opacity(isSearchMode ? 0 : 1)
+                .allowsHitTesting(!isSearchMode)
             }
+            .frame(width: 52, height: 52)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+    }
+
+    private func clearSearchText() {
+        searchText = ""
+    }
+
+    private func closeSearchMode() {
+        searchText = ""
+        isSearchFocused = false
+        isSearchMode = false
+        viewModel.clearSearch()
     }
 }

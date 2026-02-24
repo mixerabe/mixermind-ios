@@ -9,11 +9,23 @@ final class MixRepository {
         return client
     }
 
+    /// All columns except `content` (which is only used for search).
+    private static let mixColumns = """
+        id, type, created_at, title, \
+        text_content, tts_audio_url, \
+        photo_url, photo_thumbnail_url, \
+        video_url, video_thumbnail_url, \
+        import_source_url, import_media_url, import_thumbnail_url, import_audio_url, \
+        embed_url, embed_og, \
+        audio_url, \
+        apple_music_id, apple_music_title, apple_music_artist, apple_music_artwork_url
+        """
+
     // MARK: - CRUD
 
     func listMixes() async throws -> [Mix] {
         try await client.from("mixes")
-            .select()
+            .select(Self.mixColumns)
             .order("created_at", ascending: false)
             .execute()
             .value
@@ -21,7 +33,7 @@ final class MixRepository {
 
     func getMix(id: UUID) async throws -> Mix {
         try await client.from("mixes")
-            .select()
+            .select(Self.mixColumns)
             .eq("id", value: id)
             .single()
             .execute()
@@ -31,7 +43,7 @@ final class MixRepository {
     func createMix(_ payload: CreateMixPayload) async throws -> Mix {
         try await client.from("mixes")
             .insert(payload)
-            .select()
+            .select(Self.mixColumns)
             .single()
             .execute()
             .value
@@ -41,7 +53,7 @@ final class MixRepository {
         try await client.from("mixes")
             .update(payload)
             .eq("id", value: id)
-            .select()
+            .select(Self.mixColumns)
             .single()
             .execute()
             .value
@@ -62,28 +74,7 @@ final class MixRepository {
         try await client.from("mixes")
             .update(TitleUpdate(title: title))
             .eq("id", value: id)
-            .select()
-            .single()
-            .execute()
-            .value
-    }
-
-    private struct CaptionUpdate: Encodable {
-        let caption: String?
-
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(caption, forKey: .caption)
-        }
-
-        enum CodingKeys: String, CodingKey { case caption }
-    }
-
-    func updateCaption(id: UUID, caption: String?) async throws -> Mix {
-        try await client.from("mixes")
-            .update(CaptionUpdate(caption: caption))
-            .eq("id", value: id)
-            .select()
+            .select(Self.mixColumns)
             .single()
             .execute()
             .value

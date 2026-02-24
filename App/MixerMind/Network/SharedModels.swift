@@ -19,7 +19,6 @@ struct Mix: Codable, Identifiable, Hashable {
     let type: MixType
     let createdAt: Date
     let title: String?
-    let caption: String?
     var tags: [Tag] = []
 
     // Text
@@ -54,7 +53,7 @@ struct Mix: Codable, Identifiable, Hashable {
     let appleMusicArtworkUrl: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, title, caption // tags excluded — populated locally
+        case id, type, title // tags excluded — populated locally
         case createdAt = "created_at"
         case textContent = "text_content"
         case ttsAudioUrl = "tts_audio_url"
@@ -95,7 +94,6 @@ struct OGMetadata: Codable, Hashable {
 struct CreateMixPayload: Encodable {
     let type: MixType
     var title: String? = nil
-    var caption: String? = nil
     var textContent: String? = nil
     var ttsAudioUrl: String? = nil
     var photoUrl: String? = nil
@@ -113,9 +111,10 @@ struct CreateMixPayload: Encodable {
     var appleMusicTitle: String? = nil
     var appleMusicArtist: String? = nil
     var appleMusicArtworkUrl: String? = nil
+    var content: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case type, title, caption
+        case type, title, content
         case textContent = "text_content"
         case ttsAudioUrl = "tts_audio_url"
         case photoUrl = "photo_url"
@@ -138,7 +137,6 @@ struct CreateMixPayload: Encodable {
 
 struct UpdateMixPayload: Encodable {
     var title: String? = nil
-    var caption: String? = nil
     var textContent: String? = nil
     var ttsAudioUrl: String? = nil
     var photoUrl: String? = nil
@@ -156,9 +154,10 @@ struct UpdateMixPayload: Encodable {
     var appleMusicTitle: String? = nil
     var appleMusicArtist: String? = nil
     var appleMusicArtworkUrl: String? = nil
+    var content: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case title, caption
+        case title, content
         case textContent = "text_content"
         case ttsAudioUrl = "tts_audio_url"
         case photoUrl = "photo_url"

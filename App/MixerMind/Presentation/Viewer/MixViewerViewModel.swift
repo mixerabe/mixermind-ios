@@ -471,6 +471,14 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         tagsForCurrentMix = currentMix.tags
     }
 
+    /// Selected tags first, then the rest alphabetically
+    var sortedTags: [Tag] {
+        let selectedIds = Set(tagsForCurrentMix.map(\.id))
+        let selected = allTags.filter { selectedIds.contains($0.id) }
+        let unselected = allTags.filter { !selectedIds.contains($0.id) }
+        return selected + unselected
+    }
+
     func loadAllTags() {
         Task {
             do {
@@ -545,22 +553,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         let title: String? = trimmed.isEmpty ? nil : trimmed
         do {
             let updated = try await repo.updateTitle(id: currentMix.id, title: title)
-            if let index = mixes.firstIndex(where: { $0.id == updated.id }) {
-                mixes[index] = updated
-            }
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    // MARK: - Caption
-
-    func saveCaption(_ text: String) async -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let caption: String? = trimmed.isEmpty ? nil : trimmed
-        do {
-            let updated = try await repo.updateCaption(id: currentMix.id, caption: caption)
             if let index = mixes.firstIndex(where: { $0.id == updated.id }) {
                 mixes[index] = updated
             }
