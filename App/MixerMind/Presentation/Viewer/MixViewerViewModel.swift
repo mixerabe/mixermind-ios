@@ -18,6 +18,7 @@ final class MixViewerViewModel {
     private var loopObserver: Any?
     private var timeObserver: Any?
     var pendingLoad = false
+    private(set) var hasAppeared = false
 
     let coordinator: AudioPlaybackCoordinator = resolve()
 
@@ -40,6 +41,7 @@ final class MixViewerViewModel {
 
     func onAppear() {
         guard !mixes.isEmpty else { return }
+        hasAppeared = true
         coordinator.loadQueue(mixes, startingAt: activeID)
         coordinator.isLooping = !isAutoScroll
         coordinator.play()
@@ -67,11 +69,7 @@ final class MixViewerViewModel {
 
     // MARK: - Load Mix (video only)
 
-    func reloadCurrentMix() {
-        loadCurrentMix()
-    }
-
-    private func loadCurrentMix() {
+    func loadCurrentMix() {
         let mix = currentMix
         loadTagsForCurrentMix()
 
@@ -192,7 +190,7 @@ final class MixViewerViewModel {
     // MARK: - Coordinator Sync
 
     /// Called when coordinator's currentTrackIndex changes externally (lock screen, track finish).
-    /// Scrolls the viewer to match.
+    /// Scrolls the viewer to match and loads video.
     func syncFromCoordinator() {
         guard let track = coordinator.currentTrack,
               let mixId = UUID(uuidString: track.id),
@@ -207,6 +205,19 @@ final class MixViewerViewModel {
             }
             loadCurrentMix()
         }
+    }
+
+    /// Lightweight sync — updates activeID and tags only, no video. Safe to call while minimized.
+    func syncActiveTrack() {
+        guard let track = coordinator.currentTrack,
+              let mixId = UUID(uuidString: track.id),
+              mixId != activeID,
+              mixes.contains(where: { $0.id == mixId }) else { return }
+
+        activeID = mixId
+        scrolledID = mixId
+        videoProgress = 0
+        loadTagsForCurrentMix()
     }
 
     // MARK: - Auto Scroll

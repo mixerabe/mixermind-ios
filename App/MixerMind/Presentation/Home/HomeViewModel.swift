@@ -2,7 +2,6 @@ import SwiftUI
 import SwiftData
 
 enum HomeDestination: Hashable {
-    case viewer(startIndex: Int)
     case createPhoto, createURLImport, createEmbed
     case createRecordAudio, createText
 }

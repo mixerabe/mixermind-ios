@@ -3,18 +3,14 @@ import SwiftData
 import AVFoundation
 
 struct MixViewerView: View {
-    @State private var viewModel: MixViewerViewModel
-    @Environment(\.dismiss) private var dismiss
+    @Bindable var viewModel: MixViewerViewModel
+    var onMinimize: () -> Void
+    var onDismiss: () -> Void
+    var onDeleted: ((UUID) -> Void)?
+
     @Environment(\.modelContext) private var modelContext
 
     private let coordinator: AudioPlaybackCoordinator = resolve()
-
-    var onDeleted: ((UUID) -> Void)?
-
-    init(mixes: [Mix], startIndex: Int, onDeleted: ((UUID) -> Void)? = nil) {
-        _viewModel = State(initialValue: MixViewerViewModel(mixes: mixes, startIndex: startIndex))
-        self.onDeleted = onDeleted
-    }
 
     @State private var showDeleteAlert = false
 
@@ -26,18 +22,26 @@ struct MixViewerView: View {
     @State private var showNewTagSheet = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            pagingCanvas
-            viewerBottomBar
-        }
-        .ignoresSafeArea(.keyboard)
-        .background(Color(red: 0.08, green: 0.08, blue: 0.08))
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .tint(.white)
-        .toolbar {
-            viewerToolbarItems
+        NavigationStack {
+            VStack(spacing: 0) {
+                pagingCanvas
+                viewerBottomBar
+            }
+            .ignoresSafeArea(.keyboard)
+            .background(Color(red: 0.08, green: 0.08, blue: 0.08))
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .tint(.white)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { onMinimize() } label: {
+                        Image(systemName: "chevron.down")
+                            .fontWeight(.semibold)
+                    }
+                }
+                viewerToolbarItems
+            }
         }
         .sheet(isPresented: $isEditingTitle) {
             TitleEditSheet(
@@ -51,8 +55,12 @@ struct MixViewerView: View {
         }
         .onAppear {
             viewModel.modelContext = modelContext
-            viewModel.onAppear()
-            viewModel.loadAllTags()
+            if !viewModel.hasAppeared {
+                viewModel.onAppear()
+                viewModel.loadAllTags()
+            } else {
+                viewModel.loadCurrentMix()
+            }
         }
         .onDisappear {
             viewModel.onDisappear()
@@ -74,7 +82,7 @@ struct MixViewerView: View {
                     let success = await viewModel.deleteCurrentMix()
                     if success {
                         onDeleted?(mixId)
-                        dismiss()
+                        onDismiss()
                     }
                 }
             }
@@ -260,7 +268,7 @@ struct MixViewerView: View {
         )
     }
 
-    // MARK: - Title Bar (toolbar chip only — never contains a text field)
+    // MARK: - Title Bar (toolbar chip only -- never contains a text field)
 
     private var titleBar: some View {
         Button {

@@ -9,82 +9,114 @@ struct HomeView: View {
     private let audioCoordinator: AudioPlaybackCoordinator = resolve()
     var onDisconnect: () -> Void
 
+    // Viewer overlay state
+    @State private var viewerVM: MixViewerViewModel?
+    @State private var isViewerExpanded = false
+    @Namespace private var viewerAnimation
+
     var body: some View {
-        NavigationStack(path: $viewModel.navigationPath) {
-            mainContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { viewMenu }
-                ToolbarItem(placement: .primaryAction) { settingsMenu }
-            }
-            .alert("Disconnect?", isPresented: $viewModel.showDisconnectAlert) {
-                Button("Cancel", role: .cancel) {}
-                Button("Disconnect", role: .destructive) {
-                    onDisconnect()
+        ZStack {
+            NavigationStack(path: $viewModel.navigationPath) {
+                mainContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { viewMenu }
+                    ToolbarItem(placement: .primaryAction) { settingsMenu }
                 }
-            } message: {
-                Text("Your Supabase project will be disconnected and all local data cleared. You can reconnect anytime.")
-            }
-            .alert("Save as View", isPresented: $viewModel.showSaveViewAlert) {
-                TextField("View name", text: $viewModel.newViewName)
-                Button("Cancel", role: .cancel) {
-                    viewModel.newViewName = ""
+                .alert("Disconnect?", isPresented: $viewModel.showDisconnectAlert) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Disconnect", role: .destructive) {
+                        onDisconnect()
+                    }
+                } message: {
+                    Text("Your Supabase project will be disconnected and all local data cleared. You can reconnect anytime.")
                 }
-                Button("Save") {
-                    let name = viewModel.newViewName.trimmingCharacters(in: .whitespaces)
-                    viewModel.newViewName = ""
-                    guard !name.isEmpty else { return }
-                    Task { await viewModel.saveCurrentAsView(name: name) }
-                }
-            }
-            .alert("Rename View", isPresented: $viewModel.showRenameViewAlert) {
-                TextField("View name", text: $viewModel.renameViewName)
-                Button("Cancel", role: .cancel) {
-                    viewModel.renameViewName = ""
-                }
-                Button("Save") {
-                    let name = viewModel.renameViewName.trimmingCharacters(in: .whitespaces)
-                    viewModel.renameViewName = ""
-                    guard !name.isEmpty else { return }
-                    Task { await viewModel.renameActiveView(name: name) }
-                }
-            }
-            .navigationDestination(for: HomeDestination.self) { dest in
-                switch dest {
-                case .viewer(let startIndex):
-                    MixViewerView(
-                        mixes: viewModel.displayedMixes,
-                        startIndex: startIndex,
-                        onDeleted: { _ in
-                            Task { await viewModel.loadMixes(modelContext: modelContext) }
-                        }
-                    )
-                case .createPhoto:
-                    CreatePhotoPage()
-                case .createURLImport:
-                    CreateURLImportPage()
-                case .createEmbed:
-                    CreateEmbedPage()
-                case .createRecordAudio:
-                    CreateRecordAudioPage()
-                case .createText:
-                    CreateTextPage()
-                }
-            }
-            .onChange(of: viewModel.navigationPath) { _, path in
-                if path.isEmpty {
-                    Task {
-                        await viewModel.loadMixes(modelContext: modelContext)
-                        viewModel.loadTags(modelContext: modelContext)
+                .alert("Save as View", isPresented: $viewModel.showSaveViewAlert) {
+                    TextField("View name", text: $viewModel.newViewName)
+                    Button("Cancel", role: .cancel) {
+                        viewModel.newViewName = ""
+                    }
+                    Button("Save") {
+                        let name = viewModel.newViewName.trimmingCharacters(in: .whitespaces)
+                        viewModel.newViewName = ""
+                        guard !name.isEmpty else { return }
+                        Task { await viewModel.saveCurrentAsView(name: name) }
                     }
                 }
+                .alert("Rename View", isPresented: $viewModel.showRenameViewAlert) {
+                    TextField("View name", text: $viewModel.renameViewName)
+                    Button("Cancel", role: .cancel) {
+                        viewModel.renameViewName = ""
+                    }
+                    Button("Save") {
+                        let name = viewModel.renameViewName.trimmingCharacters(in: .whitespaces)
+                        viewModel.renameViewName = ""
+                        guard !name.isEmpty else { return }
+                        Task { await viewModel.renameActiveView(name: name) }
+                    }
+                }
+                .navigationDestination(for: HomeDestination.self) { dest in
+                    switch dest {
+                    case .createPhoto:
+                        CreatePhotoPage()
+                    case .createURLImport:
+                        CreateURLImportPage()
+                    case .createEmbed:
+                        CreateEmbedPage()
+                    case .createRecordAudio:
+                        CreateRecordAudioPage()
+                    case .createText:
+                        CreateTextPage()
+                    }
+                }
+                .onChange(of: viewModel.navigationPath) { _, path in
+                    if path.isEmpty {
+                        Task {
+                            await viewModel.loadMixes(modelContext: modelContext)
+                            viewModel.loadTags(modelContext: modelContext)
+                        }
+                    }
+                }
+                .task {
+                    await viewModel.loadMixes(modelContext: modelContext)
+                    viewModel.loadTags(modelContext: modelContext)
+                    await viewModel.loadSavedViews()
+                }
             }
-            .task {
-                await viewModel.loadMixes(modelContext: modelContext)
-                viewModel.loadTags(modelContext: modelContext)
-                await viewModel.loadSavedViews()
+
+            // Fullscreen viewer overlay
+            if let vm = viewerVM, isViewerExpanded {
+                MixViewerView(
+                    viewModel: vm,
+                    onMinimize: { withAnimation(.spring(duration: 0.35)) { isViewerExpanded = false } },
+                    onDismiss: dismissViewer,
+                    onDeleted: { _ in Task { await viewModel.loadMixes(modelContext: modelContext) } }
+                )
+                .matchedGeometryEffect(id: "viewer", in: viewerAnimation)
+                .ignoresSafeArea()
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(10)
             }
+        }
+        .animation(.spring(duration: 0.35), value: isViewerExpanded)
+    }
+
+    // MARK: - Viewer Helpers
+
+    private func openViewer(mixes: [Mix], startIndex: Int) {
+        let vm = MixViewerViewModel(mixes: mixes, startIndex: startIndex)
+        viewerVM = vm
+        withAnimation(.spring(duration: 0.35)) { isViewerExpanded = true }
+    }
+
+    private func dismissViewer() {
+        audioCoordinator.stop()
+        withAnimation(.spring(duration: 0.35)) {
+            isViewerExpanded = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            viewerVM = nil
         }
     }
 }
@@ -124,7 +156,7 @@ extension HomeView {
                 ForEach(Array(viewModel.displayedMixes.enumerated()), id: \.element.id) { index, mix in
                     MasonryMixCard(mix: mix)
                         .onTapGesture {
-                            viewModel.navigationPath.append(.viewer(startIndex: index))
+                            openViewer(mixes: viewModel.displayedMixes, startIndex: index)
                         }
                 }
             }
@@ -132,7 +164,17 @@ extension HomeView {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                MiniPlayerBar(coordinator: audioCoordinator).animated()
+                if let vm = viewerVM, !isViewerExpanded {
+                    MiniMixPlayer(
+                        viewModel: vm,
+                        coordinator: audioCoordinator,
+                        animation: viewerAnimation,
+                        onExpand: { withAnimation(.spring(duration: 0.35)) { isViewerExpanded = true } },
+                        onDismiss: dismissViewer
+                    )
+                } else if audioCoordinator.currentTrack != nil, viewerVM == nil {
+                    MiniPlayerBar(coordinator: audioCoordinator).animated()
+                }
                 bottomBar
             }
         }
@@ -157,9 +199,8 @@ extension HomeView {
                     ForEach(Array(searchMixes.enumerated()), id: \.element.id) { index, mix in
                         MasonryMixCard(mix: mix)
                             .onTapGesture {
-                                // Find the index in the full mixes list for the viewer
                                 if let fullIndex = viewModel.mixes.firstIndex(where: { $0.id == mix.id }) {
-                                    viewModel.navigationPath.append(.viewer(startIndex: fullIndex))
+                                    openViewer(mixes: viewModel.mixes, startIndex: fullIndex)
                                 }
                             }
                     }
@@ -169,7 +210,17 @@ extension HomeView {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                MiniPlayerBar(coordinator: audioCoordinator).animated()
+                if let vm = viewerVM, !isViewerExpanded {
+                    MiniMixPlayer(
+                        viewModel: vm,
+                        coordinator: audioCoordinator,
+                        animation: viewerAnimation,
+                        onExpand: { withAnimation(.spring(duration: 0.35)) { isViewerExpanded = true } },
+                        onDismiss: dismissViewer
+                    )
+                } else if audioCoordinator.currentTrack != nil, viewerVM == nil {
+                    MiniPlayerBar(coordinator: audioCoordinator).animated()
+                }
                 bottomBar
             }
         }
@@ -205,7 +256,7 @@ extension HomeView {
 extension HomeView {
     private var viewMenu: some View {
         Menu {
-            // "My Mixes" — active when no view selected
+            // "My Mixes" -- active when no view selected
             Button {
                 viewModel.deselectView()
             } label: {
