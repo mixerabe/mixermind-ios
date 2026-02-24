@@ -1,0 +1,328 @@
+import SwiftUI
+import AVFoundation
+
+struct MixCanvasView: View {
+    // Content
+    let mixType: MixType
+    let textContent: String
+    let mediaThumbnail: UIImage?
+    let mediaUrl: String?
+    let thumbnailUrl: String?
+    let videoPlayer: AVPlayer?
+    let appleMusicTitle: String?
+    let appleMusicArtist: String?
+    let appleMusicArtworkUrl: String?
+    let embedUrl: String?
+    let embedOg: OGMetadata?
+    let onEmbedTap: (() -> Void)?
+
+    // Playback state
+    @Binding var isPaused: Bool
+    @Binding var isMuted: Bool
+    @Binding var isScrubbing: Bool
+    @Binding var playbackProgress: Double
+    let hasPlayback: Bool
+    var playbackDuration: TimeInterval = 0
+    let onTogglePause: () -> Void
+    let onToggleMute: () -> Void
+    let onBeginScrub: () -> Void
+    let onScrub: (Double) -> Void
+    let onEndScrub: () -> Void
+
+    // Canvas tap
+    let onCanvasTap: (() -> Void)?
+
+    // Placeholder tap (create mode empty text)
+    let onPlaceholderTap: (() -> Void)?
+
+    @State private var scrubStartProgress: Double = 0
+
+    private static let darkBg = Color(red: 0.08, green: 0.08, blue: 0.08)
+
+    var body: some View {
+        ZStack {
+            Self.darkBg
+
+            // Content layer — centered
+            contentLayer
+
+            // Embed card
+            if let url = embedUrl, !url.isEmpty {
+                EmbedCardView(urlString: url, og: embedOg, onTap: onEmbedTap)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+        }
+        .contentShape(.rect)
+        .onTapGesture {
+            onCanvasTap?()
+        }
+        .overlay {
+            if isPaused, hasPlayback {
+                pausedOverlay
+            }
+        }
+        // Progress bar on top of everything so scrubbing works even when paused
+        .overlay(alignment: .bottom) {
+            progressBar
+        }
+    }
+
+    // MARK: - Content Layer
+
+    @ViewBuilder
+    private var contentLayer: some View {
+        switch mixType {
+        case .video, .import:
+            videoPreview
+            if let player = videoPlayer {
+                GeometryReader { geo in
+                    LoopingVideoView(player: player, gravity: .resizeAspect)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
+            }
+            if hasText { textOverlay }
+
+        case .photo:
+            photoContent
+            if hasText { textOverlay }
+
+        case .audio:
+            VStack(spacing: 24) {
+                AudioWaveView(isPlaying: !isPaused)
+                if playbackDuration > 0 {
+                    Text(formatTime(playbackProgress * playbackDuration))
+                        .font(.system(size: 48, weight: .thin, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .contentTransition(.numericText())
+                        .animation(.linear(duration: 0.1), value: playbackProgress)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if hasText { textOverlay }
+
+        case .appleMusic:
+            appleMusicCanvas
+            if hasText { textOverlay }
+
+        case .embed:
+            if hasText { textOverlay }
+
+        case .text:
+            if hasText {
+                Text(textContent)
+                    .font(.system(size: dynamicFontSize, weight: .medium))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .shadow(radius: 2)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let action = onPlaceholderTap {
+                Button {
+                    action()
+                } label: {
+                    Text("Type something...")
+                        .font(.title2.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.25))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    // MARK: - Video Preview (first frame while player loads)
+
+    @ViewBuilder
+    private var videoPreview: some View {
+        if let thumb = mediaThumbnail {
+            Image(uiImage: thumb)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let urlString = thumbnailUrl, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                }
+            }
+        }
+    }
+
+    // MARK: - Photo Content
+
+    @ViewBuilder
+    private var photoContent: some View {
+        if let thumb = mediaThumbnail {
+            Image(uiImage: thumb)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let urlString = mediaUrl, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                }
+            }
+        }
+    }
+
+    // MARK: - Apple Music Canvas
+
+    private var appleMusicCanvas: some View {
+        VStack(spacing: 16) {
+            if let thumb = mediaThumbnail {
+                Image(uiImage: thumb)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 200, height: 200)
+                    .clipShape(.rect(cornerRadius: 12))
+                    .shadow(radius: 8)
+            } else if let artworkUrl = appleMusicArtworkUrl, let url = URL(string: artworkUrl) {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 200, height: 200)
+                            .clipShape(.rect(cornerRadius: 12))
+                            .shadow(radius: 8)
+                    }
+                }
+            }
+            if let title = appleMusicTitle {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+            if let artist = appleMusicArtist {
+                Text(artist)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Text Overlay
+
+    private var textOverlay: some View {
+        Text(textContent)
+            .font(.system(size: dynamicFontSize, weight: .medium))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white)
+            .shadow(radius: 2)
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Progress Bar
+
+    private var progressBar: some View {
+        GeometryReader { geo in
+            let barHeight: CGFloat = isScrubbing ? 4 : 2
+            let circleSize: CGFloat = 10
+            let fillWidth = geo.size.width * playbackProgress
+
+            ZStack(alignment: .bottomLeading) {
+                Color.clear
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(.white.opacity(0.4))
+                        .frame(
+                            width: max(fillWidth - (isScrubbing ? circleSize / 2 : 0), 0),
+                            height: barHeight
+                        )
+
+                    if isScrubbing {
+                        Circle()
+                            .fill(.white)
+                            .frame(width: circleSize, height: circleSize)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.15), value: isScrubbing)
+            }
+        }
+        .frame(height: 18)
+        .contentShape(.rect)
+        .gesture(scrubGesture)
+    }
+
+    private var scrubGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                guard hasPlayback else { return }
+                let horizontal = abs(value.translation.width)
+                let vertical = abs(value.translation.height)
+                guard horizontal > vertical else { return }
+
+                if !isScrubbing {
+                    scrubStartProgress = playbackProgress
+                    onBeginScrub()
+                }
+                let screenWidth = UIScreen.main.bounds.width
+                let delta = value.translation.width / screenWidth
+                onScrub(scrubStartProgress + delta)
+            }
+            .onEnded { _ in
+                guard isScrubbing else { return }
+                onEndScrub()
+            }
+    }
+
+    // MARK: - Paused Overlay
+
+    private var pausedOverlay: some View {
+        Color.clear
+            .contentShape(.rect)
+            .onTapGesture {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    onTogglePause()
+                }
+            }
+            .overlay {
+                VStack(spacing: 16) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.white)
+                        .frame(width: 72, height: 72)
+                        .glassEffect(in: .circle)
+
+                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 44, height: 44)
+                        .glassEffect(in: .circle)
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                onToggleMute()
+                            }
+                        }
+                }
+            }
+    }
+
+    // MARK: - Helpers
+
+    private var hasText: Bool { !textContent.isEmpty }
+
+    private var dynamicFontSize: CGFloat {
+        let length = textContent.count
+        if length < 20 { return 32 }
+        if length < 50 { return 26 }
+        if length < 100 { return 22 }
+        if length < 200 { return 18 }
+        return 14
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        let total = max(0, Int(time))
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%d:%02d", m, s)
+    }
+}
