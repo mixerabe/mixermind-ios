@@ -6,6 +6,7 @@ struct CreateTextPage: View {
     @FocusState private var titleFocused: Bool
     @FocusState private var bodyFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     private var canSend: Bool {
         !viewModel.textContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
@@ -73,6 +74,7 @@ struct CreateTextPage: View {
         .navigationTitle("New Text")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            viewModel.modelContext = modelContext
             bodyFocused = true
         }
     }

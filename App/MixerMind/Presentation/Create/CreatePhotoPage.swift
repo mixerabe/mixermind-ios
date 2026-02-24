@@ -7,6 +7,7 @@ struct CreatePhotoPage: View {
     @State private var isSaving = false
     @State private var pickerDismissedOnce = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         ZStack {
@@ -54,6 +55,7 @@ struct CreatePhotoPage: View {
                 autoSave()
             }
         }
+        .onAppear { viewModel.modelContext = modelContext }
     }
 
     private func autoSave() {

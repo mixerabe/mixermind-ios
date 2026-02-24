@@ -9,7 +9,7 @@ final class MixRepository {
         return client
     }
 
-    /// All columns except `content` (which is only used for search).
+    /// All columns except `content`, `content_tsv`, and `content_embedding` (search-only).
     private static let mixColumns = """
         id, type, created_at, title, \
         text_content, tts_audio_url, \
@@ -17,8 +17,7 @@ final class MixRepository {
         video_url, video_thumbnail_url, \
         import_source_url, import_media_url, import_thumbnail_url, import_audio_url, \
         embed_url, embed_og, \
-        audio_url, \
-        apple_music_id, apple_music_title, apple_music_artist, apple_music_artwork_url
+        audio_url
         """
 
     // MARK: - CRUD

@@ -36,8 +36,6 @@ struct MasonryMixCard: View {
                 embedCard
             case .audio:
                 audioCard
-            case .appleMusic:
-                appleMusicCard
             }
 
             titleSection
@@ -102,22 +100,17 @@ struct MasonryMixCard: View {
 
     private var photoCard: some View {
         ZStack {
-            if let urlString = mix.photoThumbnailUrl ?? mix.photoUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        mediaPlaceholder(icon: "photo")
-                    default:
-                        Color(.systemGray6)
-                            .frame(minHeight: 120)
-                    }
+            LocalAsyncImage(url: URL(string: mix.photoThumbnailUrl ?? mix.photoUrl ?? "")) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                if mix.photoThumbnailUrl != nil || mix.photoUrl != nil {
+                    Color(.systemGray6)
+                        .frame(minHeight: 120)
+                } else {
+                    mediaPlaceholder(icon: "photo")
                 }
-            } else {
-                mediaPlaceholder(icon: "photo")
             }
         }
     }
@@ -126,22 +119,17 @@ struct MasonryMixCard: View {
 
     private var videoCard: some View {
         ZStack {
-            if let urlString = mix.videoThumbnailUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        mediaPlaceholder(icon: "video")
-                    default:
-                        Color(.systemGray6)
-                            .frame(minHeight: 120)
-                    }
+            LocalAsyncImage(url: URL(string: mix.videoThumbnailUrl ?? "")) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                if mix.videoThumbnailUrl != nil {
+                    Color(.systemGray6)
+                        .frame(minHeight: 120)
+                } else {
+                    mediaPlaceholder(icon: "video")
                 }
-            } else {
-                mediaPlaceholder(icon: "video")
             }
 
             playIconOverlay
@@ -152,19 +140,14 @@ struct MasonryMixCard: View {
 
     private var importCard: some View {
         ZStack {
-            if let urlString = mix.importThumbnailUrl, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        mediaPlaceholder(icon: "square.and.arrow.down")
-                    default:
-                        Color(.systemGray6)
-                            .frame(minHeight: 120)
-                    }
+            if mix.importThumbnailUrl != nil {
+                LocalAsyncImage(url: URL(string: mix.importThumbnailUrl ?? "")) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    Color(.systemGray6)
+                        .frame(minHeight: 120)
                 }
             } else if mix.importAudioUrl != nil {
                 // Audio-only import
@@ -192,20 +175,17 @@ struct MasonryMixCard: View {
 
     private var embedCard: some View {
         ZStack {
-            if let imageUrl = mix.embedOg?.imageUrl, let url = URL(string: imageUrl) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        Color(.systemGray5)
-                            .frame(height: 80)
-                    }
+            LocalAsyncImage(url: URL(string: mix.embedOg?.imageUrl ?? "")) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                if mix.embedOg?.imageUrl != nil {
+                    Color(.systemGray5)
+                        .frame(height: 80)
+                } else {
+                    mediaPlaceholder(icon: "link")
                 }
-            } else {
-                mediaPlaceholder(icon: "link")
             }
         }
     }
@@ -233,28 +213,6 @@ struct MasonryMixCard: View {
             .padding(12)
         }
         .frame(minHeight: 80)
-    }
-
-    // MARK: - Apple Music Card
-
-    private var appleMusicCard: some View {
-        ZStack {
-            if let artworkUrl = mix.appleMusicArtworkUrl, let url = URL(string: artworkUrl) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        Color(.systemGray5)
-                            .aspectRatio(1, contentMode: .fit)
-                    }
-                }
-            } else {
-                mediaPlaceholder(icon: "music.note")
-            }
-        }
     }
 
     // MARK: - Helpers

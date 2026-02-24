@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import PhotosUI
 import AVFoundation
 import UniformTypeIdentifiers
@@ -28,23 +29,16 @@ final class CreateMixViewModel {
     var audioFileName: String?
     var isAudioFromTTS = false
 
-    // Apple Music state
-    var appleMusicId: String?
-    var appleMusicTitle: String?
-    var appleMusicArtist: String?
-    var appleMusicArtworkUrl: String?
-    var appleMusicArtworkImage: UIImage?
-
     // Embed state
     var embedUrl: String = ""
     var embedOg: OGMetadata?
+    var embedOgImageData: Data?
     var isFetchingOG = false
     var hasEmbed: Bool { !embedUrl.isEmpty }
 
     // Sheet toggles
     var isShowingTextSheet = false
     var isShowingPhotoPicker = false
-    var isShowingAppleMusicSearch = false
     var isShowingRecordAudio = false
     var isShowingURLImport = false
     var isShowingTagSheet = false
@@ -113,6 +107,7 @@ final class CreateMixViewModel {
 
     private let repo: MixRepository = resolve()
     private let tagRepo: TagRepository = resolve()
+    var modelContext: ModelContext?
 
     init() {
         configureAudioSession()
@@ -124,10 +119,6 @@ final class CreateMixViewModel {
         self.textContent = mix.textContent ?? ""
         self.embedUrl = mix.embedUrl ?? ""
         self.embedOg = mix.embedOg
-        self.appleMusicId = mix.appleMusicId
-        self.appleMusicTitle = mix.appleMusicTitle
-        self.appleMusicArtist = mix.appleMusicArtist
-        self.appleMusicArtworkUrl = mix.appleMusicArtworkUrl
 
         configureAudioSession()
 
@@ -172,7 +163,7 @@ final class CreateMixViewModel {
             if let urlString = mix.ttsAudioUrl, let url = URL(string: urlString) {
                 loadExistingAudio(from: url)
             }
-        case .appleMusic, .embed:
+        case .embed:
             break
         }
     }
@@ -353,35 +344,6 @@ final class CreateMixViewModel {
         isAudioFromTTS = false
     }
 
-    // MARK: - Apple Music Selection
-
-    func setAppleMusicSong(id: String, title: String, artist: String, artworkUrl: String?, previewData: Data?) {
-        mixType = .appleMusic
-
-        appleMusicId = id
-        appleMusicTitle = title
-        appleMusicArtist = artist
-        appleMusicArtworkUrl = artworkUrl
-
-        // Auto-generate title: "Artist -- Song" (capped at 50 chars)
-        self.title = String("\(artist) -- \(title)".prefix(50))
-
-        if let artworkUrl, let url = URL(string: artworkUrl) {
-            Task {
-                if let data = try? await URLSession.shared.data(from: url).0 {
-                    self.appleMusicArtworkImage = UIImage(data: data)
-                }
-            }
-        }
-
-        if let data = previewData {
-            audioData = data
-            audioFileName = "\(title) - \(artist)"
-        } else {
-            audioFileName = "\(title) - \(artist)"
-        }
-    }
-
     // MARK: - Recorded Audio
 
     func setRecordedAudio(data: Data, fileName: String) {
@@ -477,13 +439,18 @@ final class CreateMixViewModel {
         errorMessage = nil
 
         do {
-            let result = try await MediaURLService.resolve(urlString)
+            // Spotify URLs go through a dedicated download path (audio only)
+            if MediaURLService.isSpotifyQuery(urlString) {
+                try await importSpotify(query: urlString)
+            } else {
+                let result = try await MediaURLService.resolve(urlString)
 
-            switch mode {
-            case .video:
-                try await importVideo(from: result, sourceUrl: urlString)
-            case .audio:
-                try await importAudio(from: result, sourceUrl: urlString)
+                switch mode {
+                case .video:
+                    try await importVideo(from: result, sourceUrl: urlString)
+                case .audio:
+                    try await importAudio(from: result, sourceUrl: urlString)
+                }
             }
 
             importProgress = nil
@@ -493,6 +460,17 @@ final class CreateMixViewModel {
             isImportingURL = false
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Import a Spotify track by URL — downloads MP3 via backend spotDL.
+    func importSpotify(query: String) async throws {
+        importProgress = "Downloading from Spotify..."
+        let result = try await MediaURLService.downloadSpotify(query)
+
+        self.mixType = .import
+        self.importSourceUrl = query
+        self.importAudioData = result.audioData
+        self.audioFileName = result.artist.isEmpty ? result.title : "\(result.artist) - \(result.title)"
     }
 
     private func importVideo(from result: MediaURLService.Result, sourceUrl: String) async throws {
@@ -562,22 +540,24 @@ final class CreateMixViewModel {
 
     // MARK: - Tag Management
 
-    func loadTags() async {
+    func loadTags() {
+        guard let modelContext else { return }
         do {
-            async let tags = tagRepo.listTags()
-            async let rows = tagRepo.allMixTagRows()
-            allTags = try await tags
-            let fetched = try await rows
+            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
+            allTags = localTags.map { $0.toTag() }
+
+            let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
             var map: [UUID: Set<UUID>] = [:]
-            for row in fetched { map[row.mixId, default: []].insert(row.tagId) }
+            for row in localMixTags { map[row.mixId, default: []].insert(row.tagId) }
             mixTagMap = map
         } catch {}
     }
 
-    func loadExistingTags() async {
-        guard let mixId = editingMixId else { return }
+    func loadExistingTags() {
+        guard let modelContext, let mixId = editingMixId else { return }
         do {
-            let ids = try await tagRepo.getTagIdsForMix(mixId: mixId)
+            let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
+            let ids = localMixTags.filter { $0.mixId == mixId }.map(\.tagId)
             selectedTagIds = Set(ids)
             selectedTagOrder = ids
         } catch {}
@@ -605,14 +585,39 @@ final class CreateMixViewModel {
             return nil
         }
 
-        do {
-            let tag = try await tagRepo.createTag(name: sanitized)
-            allTags.append(tag)
-            selectedTagIds.insert(tag.id)
-            return tag
-        } catch {
-            return nil
+        // Optimistic local create
+        let tagId = UUID()
+        let now = Date()
+        let tag = Tag(id: tagId, name: sanitized, createdAt: now)
+
+        if let modelContext {
+            modelContext.insert(LocalTag(tagId: tagId, name: sanitized, createdAt: now))
+            try? modelContext.save()
         }
+
+        allTags.append(tag)
+        selectedTagIds.insert(tag.id)
+
+        // Fire-and-forget Supabase call
+        Task {
+            if let remoteTag = try? await tagRepo.createTag(name: sanitized) {
+                if remoteTag.id != tagId, let modelContext {
+                    await MainActor.run {
+                        if let local = try? modelContext.fetch(FetchDescriptor<LocalTag>()).first(where: { $0.tagId == tagId }) {
+                            local.tagId = remoteTag.id
+                        }
+                        if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
+                            for row in rows where row.tagId == tagId {
+                                row.tagId = remoteTag.id
+                            }
+                        }
+                        try? modelContext.save()
+                    }
+                }
+            }
+        }
+
+        return tag
     }
 
     func renameTag(id: UUID, newName: String) async {
@@ -623,20 +628,40 @@ final class CreateMixViewModel {
 
         guard !sanitized.isEmpty else { return }
 
-        do {
-            let updated = try await tagRepo.updateTag(id: id, name: sanitized)
-            if let index = allTags.firstIndex(where: { $0.id == id }) {
-                allTags[index] = updated
-            }
-        } catch {}
+        // Optimistic local rename
+        if let modelContext,
+           let local = try? modelContext.fetch(FetchDescriptor<LocalTag>()).first(where: { $0.tagId == id }) {
+            local.name = sanitized
+            try? modelContext.save()
+        }
+        if let index = allTags.firstIndex(where: { $0.id == id }) {
+            allTags[index] = Tag(id: id, name: sanitized, createdAt: allTags[index].createdAt)
+        }
+
+        // Fire-and-forget Supabase call
+        Task { _ = try? await tagRepo.updateTag(id: id, name: sanitized) }
     }
 
     func deleteTag(id: UUID) async {
-        do {
-            try await tagRepo.deleteTag(id: id)
-            allTags.removeAll { $0.id == id }
-            selectedTagIds.remove(id)
-        } catch {}
+        // Optimistic local delete
+        if let modelContext {
+            if let local = try? modelContext.fetch(FetchDescriptor<LocalTag>()).first(where: { $0.tagId == id }) {
+                modelContext.delete(local)
+            }
+            // Delete mix_tag relationships for this tag
+            if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
+                for row in rows where row.tagId == id {
+                    modelContext.delete(row)
+                }
+            }
+            try? modelContext.save()
+        }
+
+        allTags.removeAll { $0.id == id }
+        selectedTagIds.remove(id)
+
+        // Fire-and-forget Supabase call
+        Task { try? await tagRepo.deleteTag(id: id) }
     }
 
     // MARK: - Embed URL
@@ -649,12 +674,25 @@ final class CreateMixViewModel {
         mixType = .embed
         embedUrl = normalized
         embedOg = nil
+        embedOgImageData = nil
         isFetchingOG = true
         do {
             embedOg = try await OpenGraphService.fetch(normalized)
         } catch {
             embedOg = OGMetadata(title: nil, description: nil, imageUrl: nil, host: URL(string: normalized)?.host ?? normalized)
         }
+
+        // Download OG image immediately so we own a local copy
+        if let imageUrlString = embedOg?.imageUrl,
+           let imageUrl = URL(string: imageUrlString) {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: imageUrl)
+                embedOgImageData = data
+            } catch {
+                // Image download failed — continue without image
+            }
+        }
+
         isFetchingOG = false
 
         // Auto-generate title: "Host -- Page Title" (capped at 50 chars)
@@ -679,6 +717,7 @@ final class CreateMixViewModel {
         textContent = ""
         embedUrl = ""
         embedOg = nil
+        embedOgImageData = nil
         photoData = nil
         photoThumbnail = nil
         videoData = nil
@@ -690,11 +729,6 @@ final class CreateMixViewModel {
         audioData = nil
         audioFileName = nil
         isAudioFromTTS = false
-        appleMusicId = nil
-        appleMusicTitle = nil
-        appleMusicArtist = nil
-        appleMusicArtworkUrl = nil
-        appleMusicArtworkImage = nil
         selectedPhotoItem = nil
         mixType = .text
     }
@@ -916,7 +950,22 @@ final class CreateMixViewModel {
 
             case .embed:
                 payload.embedUrl = embedUrl
-                payload.embedOg = embedOg
+                if let imageData = embedOgImageData {
+                    let imageUrl = try await repo.uploadMedia(data: imageData, fileName: "embed_og.jpg", contentType: "image/jpeg")
+                    payload.embedOg = OGMetadata(
+                        title: embedOg?.title,
+                        description: embedOg?.description,
+                        imageUrl: imageUrl,
+                        host: embedOg?.host ?? ""
+                    )
+                } else {
+                    payload.embedOg = OGMetadata(
+                        title: embedOg?.title,
+                        description: embedOg?.description,
+                        imageUrl: nil,
+                        host: embedOg?.host ?? ""
+                    )
+                }
 
             case .audio:
                 if var data = audioData {
@@ -929,12 +978,6 @@ final class CreateMixViewModel {
                         payload.audioUrl = url
                     }
                 }
-
-            case .appleMusic:
-                payload.appleMusicId = appleMusicId
-                payload.appleMusicTitle = appleMusicTitle
-                payload.appleMusicArtist = appleMusicArtist
-                payload.appleMusicArtworkUrl = appleMusicArtworkUrl
             }
 
             // Generate searchable content (non-fatal)
@@ -970,11 +1013,19 @@ final class CreateMixViewModel {
                     }
                 case .embed:
                     payload.content = ContentService.fromEmbed(og: embedOg, url: embedUrl)
-                case .appleMusic:
-                    payload.content = ContentService.fromAppleMusic(title: appleMusicTitle, artist: appleMusicArtist)
                 }
             } catch {
                 // Content generation failed — continue saving without content
+            }
+
+            // Generate embedding from content (non-fatal)
+            if let contentText = payload.content, !contentText.isEmpty {
+                do {
+                    let embedding = try await EmbeddingService.generate(from: contentText)
+                    payload.contentEmbedding = PgVector(values: embedding)
+                } catch {
+                    // Embedding generation failed — continue saving without embedding
+                }
             }
 
             // Auto-generate title (non-fatal)
@@ -1072,7 +1123,22 @@ final class CreateMixViewModel {
 
             case .embed:
                 payload.embedUrl = embedUrl
-                payload.embedOg = embedOg
+                if let imageData = embedOgImageData {
+                    let imageUrl = try await repo.uploadMedia(data: imageData, fileName: "embed_og.jpg", contentType: "image/jpeg")
+                    payload.embedOg = OGMetadata(
+                        title: embedOg?.title,
+                        description: embedOg?.description,
+                        imageUrl: imageUrl,
+                        host: embedOg?.host ?? ""
+                    )
+                } else {
+                    payload.embedOg = OGMetadata(
+                        title: embedOg?.title,
+                        description: embedOg?.description,
+                        imageUrl: nil,
+                        host: embedOg?.host ?? ""
+                    )
+                }
 
             case .audio:
                 if var data = audioData {
@@ -1085,12 +1151,6 @@ final class CreateMixViewModel {
                         payload.audioUrl = url
                     }
                 }
-
-            case .appleMusic:
-                payload.appleMusicId = appleMusicId
-                payload.appleMusicTitle = appleMusicTitle
-                payload.appleMusicArtist = appleMusicArtist
-                payload.appleMusicArtworkUrl = appleMusicArtworkUrl
             }
 
             // Regenerate searchable content (non-fatal)
@@ -1124,11 +1184,19 @@ final class CreateMixViewModel {
                     }
                 case .embed:
                     payload.content = ContentService.fromEmbed(og: embedOg, url: embedUrl)
-                case .appleMusic:
-                    payload.content = ContentService.fromAppleMusic(title: appleMusicTitle, artist: appleMusicArtist)
                 }
             } catch {
                 // Content generation failed — continue saving without content
+            }
+
+            // Generate embedding from content (non-fatal)
+            if let contentText = payload.content, !contentText.isEmpty {
+                do {
+                    let embedding = try await EmbeddingService.generate(from: contentText)
+                    payload.contentEmbedding = PgVector(values: embedding)
+                } catch {
+                    // Embedding generation failed — continue saving without embedding
+                }
             }
 
             _ = try await repo.updateMix(id: mixId, payload)

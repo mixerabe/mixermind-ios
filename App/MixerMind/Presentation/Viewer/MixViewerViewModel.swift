@@ -1,6 +1,6 @@
 import SwiftUI
+import SwiftData
 import AVFoundation
-import MusicKit
 
 @Observable @MainActor
 final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
@@ -21,9 +21,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
     private var loopObserver: Any?
     private var timeObserver: Any?
     private var progressTimer: Timer?
-    private var musicPlayer = ApplicationMusicPlayer.shared
-    private var isUsingMusicPlayer = false
-    private var musicProgressTimer: Timer?
     var pendingLoad = false
 
     var currentMix: Mix {
@@ -40,9 +37,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
            item.duration.seconds.isFinite, item.duration.seconds > 0 {
             return item.duration.seconds
         }
-        if isUsingMusicPlayer, musicSongDuration > 0 {
-            return musicSongDuration
-        }
         return 0
     }
 
@@ -52,8 +46,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
             return true
         case .audio:
             return currentMix.audioUrl != nil
-        case .appleMusic:
-            return currentMix.appleMusicId != nil
         case .text:
             return currentMix.ttsAudioUrl != nil
         case .photo, .embed:
@@ -142,11 +134,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
                 loadAudioFromURL(url)
             }
 
-        case .appleMusic:
-            if let musicId = mix.appleMusicId {
-                startAppleMusicPlayback(id: musicId)
-            }
-
         case .text:
             if let urlString = mix.ttsAudioUrl, let url = URL(string: urlString) {
                 loadAudioFromURL(url)
@@ -161,66 +148,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    private var musicSongDuration: TimeInterval = 0
-
-    private func startAppleMusicPlayback(id: String) {
-        Task {
-            do {
-                let request = MusicCatalogResourceRequest<Song>(matching: \.id, equalTo: MusicItemID(id))
-                let response = try await request.response()
-                guard let song = response.items.first else { return }
-
-                #if targetEnvironment(simulator)
-                // ApplicationMusicPlayer unavailable on Simulator — use 30s preview
-                if let previewURL = song.previewAssets?.first?.url {
-                    let (data, _) = try await URLSession.shared.data(from: previewURL)
-                    startAudioPlayback(from: data)
-                }
-                #else
-                musicSongDuration = song.duration ?? 0
-                musicPlayer.queue = [song]
-                try await musicPlayer.play()
-                isUsingMusicPlayer = true
-                startMusicProgressTimer()
-                #endif
-            } catch {}
-        }
-    }
-
-    private func startMusicProgressTimer() {
-        musicProgressTimer?.invalidate()
-        let vm = self
-        musicProgressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            Task { @MainActor in
-                guard vm.isUsingMusicPlayer, !vm.isScrubbing else { return }
-                let duration = vm.musicSongDuration
-                guard duration > 0 else { return }
-                let currentTime = vm.musicPlayer.playbackTime
-                vm.playbackProgress = currentTime / duration
-
-                // Song ended
-                let status = vm.musicPlayer.state.playbackStatus
-                if (status == .stopped || status == .paused) && currentTime >= duration - 0.5 {
-                    if vm.isAutoScroll {
-                        vm.advanceToNext()
-                    } else {
-                        vm.musicPlayer.restartCurrentEntry()
-                        try? await vm.musicPlayer.play()
-                    }
-                }
-            }
-        }
-    }
-
-    private func stopMusicPlayback() {
-        musicProgressTimer?.invalidate()
-        musicProgressTimer = nil
-        if isUsingMusicPlayer {
-            musicPlayer.stop()
-            isUsingMusicPlayer = false
-        }
-    }
-
     // MARK: - Video Playback
 
     private func startVideoPlayback(url: URL) {
@@ -228,7 +155,7 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
 
         let player = AVPlayer(url: url)
         player.volume = 1.0
-        let hasSeparateAudio = currentMix.importAudioUrl != nil || currentMix.appleMusicId != nil
+        let hasSeparateAudio = currentMix.importAudioUrl != nil
         player.isMuted = isMuted || hasSeparateAudio
         videoPlayer = player
 
@@ -307,7 +234,7 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
     }
 
     private func onVideoLooped() {
-        guard currentMix.importAudioUrl != nil || currentMix.appleMusicId != nil else { return }
+        guard currentMix.importAudioUrl != nil else { return }
         audioPlayer?.currentTime = 0
         audioPlayer?.play()
     }
@@ -374,7 +301,7 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
     func toggleMute() {
         isMuted.toggle()
         audioPlayer?.volume = isMuted ? 0 : 1
-        let hasSeparateAudio = currentMix.importAudioUrl != nil || currentMix.appleMusicId != nil
+        let hasSeparateAudio = currentMix.importAudioUrl != nil
         videoPlayer?.isMuted = isMuted || hasSeparateAudio
     }
 
@@ -383,7 +310,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         if isPaused {
             videoPlayer?.pause()
             audioPlayer?.pause()
-            if isUsingMusicPlayer { musicPlayer.pause() }
             if let start = fallbackStartDate {
                 fallbackPausedElapsed = Date().timeIntervalSince(start)
                 fallbackTimer?.invalidate()
@@ -392,9 +318,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         } else {
             videoPlayer?.play()
             audioPlayer?.play()
-            if isUsingMusicPlayer {
-                Task { try? await musicPlayer.play() }
-            }
             if fallbackPausedElapsed > 0, !hasRealMedia {
                 fallbackStartDate = Date().addingTimeInterval(-fallbackPausedElapsed)
                 fallbackPausedElapsed = 0
@@ -412,7 +335,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         wasPlayingBeforeScrub = !isPaused
         videoPlayer?.pause()
         audioPlayer?.pause()
-        if isUsingMusicPlayer { musicPlayer.pause() }
     }
 
     func scrub(to progress: Double) {
@@ -429,10 +351,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         if let audio = audioPlayer, audio.duration > 0 {
             audio.currentTime = clamped * audio.duration
         }
-
-        if isUsingMusicPlayer, musicSongDuration > 0 {
-            musicPlayer.playbackTime = clamped * musicSongDuration
-        }
     }
 
     func endScrub() {
@@ -440,9 +358,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
         if wasPlayingBeforeScrub {
             videoPlayer?.play()
             audioPlayer?.play()
-            if isUsingMusicPlayer {
-                Task { try? await musicPlayer.play() }
-            }
             if !hasRealMedia {
                 let elapsed = playbackProgress * Self.fallbackDuration
                 fallbackStartDate = Date().addingTimeInterval(-elapsed)
@@ -458,7 +373,6 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
     func stopAllPlayback() {
         stopVideoPlayback()
         stopAudioPlayback()
-        stopMusicPlayback()
         stopFallbackTimer()
         playbackProgress = 0
     }
@@ -466,6 +380,7 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
     // MARK: - Tags
 
     private let tagRepo: TagRepository = resolve()
+    var modelContext: ModelContext?
 
     func loadTagsForCurrentMix() {
         tagsForCurrentMix = currentMix.tags
@@ -480,59 +395,99 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
     }
 
     func loadAllTags() {
-        Task {
-            do {
-                allTags = try await tagRepo.listTags()
-            } catch {}
-        }
+        guard let modelContext else { return }
+        do {
+            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
+            allTags = localTags.map { $0.toTag() }
+        } catch {}
     }
 
     func toggleTag(_ tag: Tag) {
+        guard let modelContext else { return }
         let mixId = currentMix.id
         let isOn = tagsForCurrentMix.contains { $0.id == tag.id }
+
+        // Optimistic local update
         if isOn {
             tagsForCurrentMix.removeAll { $0.id == tag.id }
+            // Delete from SwiftData
+            if let row = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()).first(where: {
+                $0.mixId == mixId && $0.tagId == tag.id
+            }) {
+                modelContext.delete(row)
+            }
         } else {
             tagsForCurrentMix.append(tag)
+            // Add to SwiftData
+            modelContext.insert(LocalMixTag(mixId: mixId, tagId: tag.id))
         }
+
+        if let i = mixes.firstIndex(where: { $0.id == mixId }) {
+            mixes[i].tags = tagsForCurrentMix
+        }
+        try? modelContext.save()
+
+        // Fire-and-forget Supabase call
         let newIds = Set(tagsForCurrentMix.map(\.id))
+        Task { try? await tagRepo.setTagsForMix(mixId: mixId, tagIds: newIds) }
+    }
+
+    func createAndAddTag(name: String) {
+        guard let modelContext else { return }
+        let tagId = UUID()
+        let now = Date()
+        let tag = Tag(id: tagId, name: name, createdAt: now)
+
+        // Optimistic: add to SwiftData + local state immediately
+        modelContext.insert(LocalTag(tagId: tagId, name: name, createdAt: now))
+        try? modelContext.save()
+
+        allTags.append(tag)
+        allTags.sort { $0.name < $1.name }
+        toggleTag(tag)
+
+        // Fire-and-forget Supabase call
         Task {
-            try? await tagRepo.setTagsForMix(mixId: mixId, tagIds: newIds)
-            if let i = mixes.firstIndex(where: { $0.id == mixId }) {
-                mixes[i].tags = tagsForCurrentMix
+            if let remoteTag = try? await tagRepo.createTag(name: name) {
+                // If remote ID differs, update local
+                if remoteTag.id != tagId {
+                    await MainActor.run {
+                        // Update LocalTag
+                        if let local = try? modelContext.fetch(FetchDescriptor<LocalTag>()).first(where: { $0.tagId == tagId }) {
+                            local.tagId = remoteTag.id
+                        }
+                        // Update LocalMixTag references
+                        if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
+                            for row in rows where row.tagId == tagId {
+                                row.tagId = remoteTag.id
+                            }
+                        }
+                        try? modelContext.save()
+                    }
+                }
             }
         }
     }
 
-    func createAndAddTag(name: String) {
-        Task {
-            do {
-                let tag = try await tagRepo.createTag(name: name)
-                allTags.append(tag)
-                allTags.sort { $0.name < $1.name }
-                toggleTag(tag)
-            } catch {}
-        }
-    }
-
-    /// Reload tags from Supabase for current mix (after editing)
-    func reloadTagsFromRemote() {
+    /// Reload tags from local SwiftData
+    func reloadTagsFromLocal() {
+        guard let modelContext else { return }
         let mixId = currentMix.id
-        Task {
-            do {
-                let tagIds = try await tagRepo.getTagIdsForMix(mixId: mixId)
-                let fetched = try await tagRepo.listTags()
-                allTags = fetched
-                let tagIdSet = Set(tagIds)
-                let tags = fetched.filter { tagIdSet.contains($0.id) }
-                if let i = mixes.firstIndex(where: { $0.id == mixId }) {
-                    mixes[i].tags = tags
-                }
-                if currentMix.id == mixId {
-                    tagsForCurrentMix = tags
-                }
-            } catch {}
-        }
+        do {
+            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
+            allTags = localTags.map { $0.toTag() }
+
+            let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
+            let tagIdsForMix = Set(localMixTags.filter { $0.mixId == mixId }.map(\.tagId))
+            let tags = allTags.filter { tagIdsForMix.contains($0.id) }
+
+            if let i = mixes.firstIndex(where: { $0.id == mixId }) {
+                mixes[i].tags = tags
+            }
+            if currentMix.id == mixId {
+                tagsForCurrentMix = tags
+            }
+        } catch {}
     }
 
     // MARK: - Auto Scroll
@@ -548,30 +503,80 @@ final class MixViewerViewModel: NSObject, AVAudioPlayerDelegate {
 
     // MARK: - Title
 
+    private let repo: MixRepository = resolve()
+
     func saveTitle(_ text: String) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let title: String? = trimmed.isEmpty ? nil : trimmed
-        do {
-            let updated = try await repo.updateTitle(id: currentMix.id, title: title)
-            if let index = mixes.firstIndex(where: { $0.id == updated.id }) {
-                mixes[index] = updated
+        let mixId = currentMix.id
+
+        // Optimistic local update
+        if let modelContext {
+            if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
+                local.title = title
+                try? modelContext.save()
             }
-            return true
-        } catch {
-            return false
         }
+        if let index = mixes.firstIndex(where: { $0.id == mixId }) {
+            mixes[index] = Mix(
+                id: mixes[index].id,
+                type: mixes[index].type,
+                createdAt: mixes[index].createdAt,
+                title: title,
+                tags: mixes[index].tags,
+                textContent: mixes[index].textContent,
+                ttsAudioUrl: mixes[index].ttsAudioUrl,
+                photoUrl: mixes[index].photoUrl,
+                photoThumbnailUrl: mixes[index].photoThumbnailUrl,
+                videoUrl: mixes[index].videoUrl,
+                videoThumbnailUrl: mixes[index].videoThumbnailUrl,
+                importSourceUrl: mixes[index].importSourceUrl,
+                importMediaUrl: mixes[index].importMediaUrl,
+                importThumbnailUrl: mixes[index].importThumbnailUrl,
+                importAudioUrl: mixes[index].importAudioUrl,
+                embedUrl: mixes[index].embedUrl,
+                embedOg: mixes[index].embedOg,
+                audioUrl: mixes[index].audioUrl
+            )
+        }
+
+        // Fire-and-forget Supabase call
+        Task { _ = try? await repo.updateTitle(id: mixId, title: title) }
+        return true
     }
 
     // MARK: - Delete
 
-    private let repo: MixRepository = resolve()
-
     func deleteCurrentMix() async -> Bool {
-        do {
-            try await repo.deleteMix(id: currentMix.id)
-            return true
-        } catch {
-            return false
+        let mixId = currentMix.id
+
+        // Optimistic local delete
+        if let modelContext {
+            if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
+                // Delete local media files
+                let fileManager = LocalFileManager.shared
+                let paths = [
+                    local.localTtsAudioPath, local.localPhotoPath, local.localPhotoThumbnailPath,
+                    local.localVideoPath, local.localVideoThumbnailPath, local.localImportMediaPath,
+                    local.localImportThumbnailPath, local.localImportAudioPath, local.localEmbedOgImagePath,
+                    local.localAudioPath,
+                ]
+                for path in paths {
+                    if let path { fileManager.deleteFile(at: path) }
+                }
+                modelContext.delete(local)
+            }
+            // Delete mix_tag relationships
+            if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
+                for row in rows where row.mixId == mixId {
+                    modelContext.delete(row)
+                }
+            }
+            try? modelContext.save()
         }
+
+        // Fire-and-forget Supabase call
+        Task { try? await repo.deleteMix(id: mixId) }
+        return true
     }
 }

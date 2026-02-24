@@ -11,7 +11,6 @@ enum SearchService {
         let photoThumbnailUrl: String?
         let videoThumbnailUrl: String?
         let importThumbnailUrl: String?
-        let appleMusicArtworkUrl: String?
         let embedOg: OGMetadata?
 
         enum CodingKeys: String, CodingKey {
@@ -20,7 +19,6 @@ enum SearchService {
             case photoThumbnailUrl = "photo_thumbnail_url"
             case videoThumbnailUrl = "video_thumbnail_url"
             case importThumbnailUrl = "import_thumbnail_url"
-            case appleMusicArtworkUrl = "apple_music_artwork_url"
             case embedOg = "embed_og"
         }
     }
@@ -28,13 +26,19 @@ enum SearchService {
     private struct SearchRequest: Encodable {
         let query: String
         let limit: Int
+        let tagIds: [UUID]?
+
+        enum CodingKeys: String, CodingKey {
+            case query, limit
+            case tagIds = "tag_ids"
+        }
     }
 
     private struct EdgeFunctionResponse: Decodable {
         let results: [SearchResult]
     }
 
-    static func search(query: String) async throws -> [SearchResult] {
+    static func search(query: String, tagIds: Set<UUID> = []) async throws -> [SearchResult] {
         guard let client = SupabaseManager.shared.client else {
             throw SearchError.notConfigured
         }
@@ -42,10 +46,11 @@ enum SearchService {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        // The SDK generic invoke decodes directly
+        let filterTagIds: [UUID]? = tagIds.isEmpty ? nil : Array(tagIds)
+
         let response: EdgeFunctionResponse = try await client.functions.invoke(
             "search",
-            options: .init(body: SearchRequest(query: trimmed, limit: 20))
+            options: .init(body: SearchRequest(query: trimmed, limit: 20, tagIds: filterTagIds))
         )
         return response.results
     }

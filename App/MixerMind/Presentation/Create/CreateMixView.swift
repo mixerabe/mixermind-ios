@@ -7,9 +7,6 @@ struct MixCanvasContent: View {
     let mixType: MixType
     let textContent: String
     let mediaThumbnail: UIImage?
-    var appleMusicTitle: String? = nil
-    var appleMusicArtist: String? = nil
-    var appleMusicArtworkUrl: String? = nil
     var embedUrl: String? = nil
     var embedOg: OGMetadata? = nil
     var embedImage: UIImage? = nil
@@ -38,30 +35,6 @@ struct MixCanvasContent: View {
                 Image(systemName: "speaker.wave.3.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(.white)
-                if hasText {
-                    textView
-                }
-
-            case .appleMusic:
-                VStack(spacing: 12) {
-                    if let thumb = mediaThumbnail {
-                        Image(uiImage: thumb)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 160, height: 160)
-                            .clipShape(.rect(cornerRadius: 10))
-                    }
-                    if let title = appleMusicTitle {
-                        Text(title)
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                    }
-                    if let artist = appleMusicArtist {
-                        Text(artist)
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                }
                 if hasText {
                     textView
                 }

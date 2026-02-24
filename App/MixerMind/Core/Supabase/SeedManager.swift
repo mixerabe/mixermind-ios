@@ -6,20 +6,12 @@ struct SeedMix: Decodable {
     let textContent: String?
     let mediaFile: String?
     let audioFile: String?
-    let appleMusicId: String?
-    let appleMusicTitle: String?
-    let appleMusicArtist: String?
-    let appleMusicArtworkUrl: String?
 
     enum CodingKeys: String, CodingKey {
         case type
         case textContent = "text_content"
         case mediaFile = "media_file"
         case audioFile = "audio_file"
-        case appleMusicId = "apple_music_id"
-        case appleMusicTitle = "apple_music_title"
-        case appleMusicArtist = "apple_music_artist"
-        case appleMusicArtworkUrl = "apple_music_artwork_url"
     }
 }
 
@@ -70,12 +62,6 @@ enum SeedManager {
                 let url = try await repo.uploadMedia(data: audioData, fileName: audioFile, contentType: contentType)
                 payload.audioUrl = url
             }
-
-            // Apple Music fields
-            payload.appleMusicId = seed.appleMusicId
-            payload.appleMusicTitle = seed.appleMusicTitle
-            payload.appleMusicArtist = seed.appleMusicArtist
-            payload.appleMusicArtworkUrl = seed.appleMusicArtworkUrl
 
             _ = try await repo.createMix(payload)
         }

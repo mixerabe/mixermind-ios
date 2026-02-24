@@ -6,6 +6,7 @@ struct CreateEmbedPage: View {
     @State private var isSaving = false
     @FocusState private var isFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     private var isDisabled: Bool {
         urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isFetchingOG || isSaving
@@ -66,7 +67,10 @@ struct CreateEmbedPage: View {
         .padding()
         .navigationTitle("Embed Link")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { isFocused = true }
+        .onAppear {
+            viewModel.modelContext = modelContext
+            isFocused = true
+        }
     }
 
     private func embedAndSave() {

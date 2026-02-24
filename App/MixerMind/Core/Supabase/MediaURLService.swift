@@ -15,7 +15,7 @@ enum MediaURLService {
     }
 
     enum Platform: String, Decodable {
-        case instagram, youtube, tiktok
+        case instagram, youtube, tiktok, spotify
     }
 
     enum MediaError: LocalizedError {
@@ -26,7 +26,7 @@ enum MediaURLService {
 
         var errorDescription: String? {
             switch self {
-            case .unsupportedURL: return "Unsupported URL. Paste an Instagram, YouTube, or TikTok link."
+            case .unsupportedURL: return "Unsupported URL. Paste an Instagram, YouTube, TikTok, or Spotify link."
             case .noMediaFound: return "No video found at this URL"
             case .serverError(let msg): return msg
             case .networkError: return "Network error"
@@ -44,6 +44,12 @@ enum MediaURLService {
             return try await resolveYouTubeOnDevice(urlString)
         case .instagram, .tiktok:
             return try await resolveViaBackend(urlString)
+        case .spotify:
+            // Spotify uses a separate download path — this shouldn't be called directly.
+            // Return a stub result; actual download goes through downloadSpotify().
+            return Result(platform: .spotify, originalURL: urlString,
+                          videoURL: nil, audioURL: nil, thumbnailURL: nil,
+                          title: nil, duration: nil)
         case nil:
             throw MediaError.unsupportedURL
         }
@@ -94,7 +100,14 @@ enum MediaURLService {
         if url.contains("tiktok.com/") {
             return .tiktok
         }
+        if url.contains("open.spotify.com/") || url.contains("spotify.com/") {
+            return .spotify
+        }
         return nil
+    }
+
+    static func isSpotifyQuery(_ input: String) -> Bool {
+        detectPlatform(input) == .spotify
     }
 
     // MARK: - Backend (Instagram / TikTok)
@@ -146,6 +159,52 @@ enum MediaURLService {
             title: json["title"] as? String,
             duration: json["duration"] as? Double
         )
+    }
+
+    // MARK: - Spotify (via Backend spotDL)
+
+    struct SpotifyResult {
+        let audioData: Data
+        let title: String
+        let artist: String
+        let duration: Double?
+    }
+
+    /// Download a Spotify track by URL or search query. Returns MP3 data + metadata.
+    static func downloadSpotify(_ query: String) async throws -> SpotifyResult {
+        guard let endpoint = URL(string: "\(Constants.backendURL)/api/media/spotify") else {
+            throw MediaError.serverError("Backend not configured")
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["query": query])
+        request.timeoutInterval = 120
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw MediaError.networkError
+        }
+
+        guard http.statusCode == 200 else {
+            if let body = try? JSONDecoder().decode([String: String].self, from: data),
+               let msg = body["detail"] {
+                throw MediaError.serverError(msg)
+            }
+            throw MediaError.serverError("Server returned \(http.statusCode)")
+        }
+
+        guard !data.isEmpty else {
+            throw MediaError.noMediaFound
+        }
+
+        let title = http.value(forHTTPHeaderField: "X-Track-Title") ?? "Spotify Track"
+        let artist = http.value(forHTTPHeaderField: "X-Track-Artist") ?? ""
+        let duration = http.value(forHTTPHeaderField: "X-Track-Duration").flatMap(Double.init)
+
+        return SpotifyResult(audioData: data, title: title, artist: artist, duration: duration)
     }
 
     // MARK: - YouTube (On-Device InnerTube)

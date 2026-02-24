@@ -23,6 +23,13 @@
 		935A35782F4AD51A001CBC33 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 935A35772F4AD51A001CBC33 /* Supabase */; };
 		AA0001012F5A000000000001 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001002F5A000000000001 /* Supabase */; };
 		AA0004012F5A000000000001 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA0005002F5A000000000001 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		B1CA00112F5B000000AAAAAA /* test_track_1.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00012F5B000000AAAAAA /* test_track_1.mp3 */; };
+		B1CA00122F5B000000AAAAAA /* test_track_2.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00022F5B000000AAAAAA /* test_track_2.mp3 */; };
+		B1CA00132F5B000000AAAAAA /* test_track_3.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00032F5B000000AAAAAA /* test_track_3.mp3 */; };
+		B1CA00142F5B000000AAAAAA /* test_track_4.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00042F5B000000AAAAAA /* test_track_4.mp3 */; };
+		B1CA00152F5B000000AAAAAA /* test_track_5.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00052F5B000000AAAAAA /* test_track_5.mp3 */; };
+		B1CA00162F5B000000BBBBBB /* test_track_6.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00062F5B000000BBBBBB /* test_track_6.mp4 */; };
+		B1CA00172F5B000000BBBBBB /* test_track_7.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00072F5B000000BBBBBB /* test_track_7.mp4 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -52,6 +59,13 @@
 /* Begin PBXFileReference section */
 		738A77CE2F291B860055E007 /* MixerMind.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MixerMind.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0005002F5A000000000001 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1CA00012F5B000000AAAAAA /* test_track_1.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_1.mp3; sourceTree = "<group>"; };
+		B1CA00022F5B000000AAAAAA /* test_track_2.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_2.mp3; sourceTree = "<group>"; };
+		B1CA00032F5B000000AAAAAA /* test_track_3.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_3.mp3; sourceTree = "<group>"; };
+		B1CA00042F5B000000AAAAAA /* test_track_4.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_4.mp3; sourceTree = "<group>"; };
+		B1CA00052F5B000000AAAAAA /* test_track_5.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_5.mp3; sourceTree = "<group>"; };
+		B1CA00062F5B000000BBBBBB /* test_track_6.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = test_track_6.mp4; sourceTree = "<group>"; };
+		B1CA00072F5B000000BBBBBB /* test_track_7.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = test_track_7.mp4; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -124,6 +138,7 @@
 			children = (
 				738A77D02F291B860055E007 /* MixerMind */,
 				AA0006002F5A000000000001 /* ShareExtension */,
+				B1CA00202F5B000000AAAAAA /* MixerMind/Resources/TestAudio */,
 				935A35762F4AD51A001CBC33 /* Frameworks */,
 				738A77CF2F291B860055E007 /* Products */,
 			);
@@ -143,6 +158,20 @@
 			children = (
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		B1CA00202F5B000000AAAAAA /* MixerMind/Resources/TestAudio */ = {
+			isa = PBXGroup;
+			children = (
+				B1CA00012F5B000000AAAAAA /* test_track_1.mp3 */,
+				B1CA00022F5B000000AAAAAA /* test_track_2.mp3 */,
+				B1CA00032F5B000000AAAAAA /* test_track_3.mp3 */,
+				B1CA00042F5B000000AAAAAA /* test_track_4.mp3 */,
+				B1CA00052F5B000000AAAAAA /* test_track_5.mp3 */,
+				B1CA00062F5B000000BBBBBB /* test_track_6.mp4 */,
+				B1CA00072F5B000000BBBBBB /* test_track_7.mp4 */,
+			);
+			path = MixerMind/Resources/TestAudio;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -262,6 +291,13 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B1CA00112F5B000000AAAAAA /* test_track_1.mp3 in Resources */,
+				B1CA00122F5B000000AAAAAA /* test_track_2.mp3 in Resources */,
+				B1CA00132F5B000000AAAAAA /* test_track_3.mp3 in Resources */,
+				B1CA00142F5B000000AAAAAA /* test_track_4.mp3 in Resources */,
+				B1CA00152F5B000000AAAAAA /* test_track_5.mp3 in Resources */,
+				B1CA00162F5B000000BBBBBB /* test_track_6.mp4 in Resources */,
+				B1CA00172F5B000000BBBBBB /* test_track_7.mp4 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -433,6 +469,7 @@
 				DEVELOPMENT_TEAM = 3G6DVA664H;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MixerMindInfo.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "mixermind uses Apple Music to let you add songs to your mixes.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "mixermind needs microphone access to record audio for your mixes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -471,6 +508,7 @@
 				DEVELOPMENT_TEAM = 3G6DVA664H;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MixerMindInfo.plist;
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "mixermind uses Apple Music to let you add songs to your mixes.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "mixermind needs microphone access to record audio for your mixes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

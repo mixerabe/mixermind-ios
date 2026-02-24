@@ -1,10 +1,12 @@
 import SwiftUI
 
 struct HomeView: View {
+    @Environment(\.modelContext) private var modelContext
     @State private var viewModel = HomeViewModel()
     @State private var searchText = ""
     @State private var isSearchMode = false
     @FocusState private var isSearchFocused: Bool
+    private let audioCoordinator: AudioPlaybackCoordinator = resolve()
     var onDisconnect: () -> Void
 
     var body: some View {
@@ -55,7 +57,7 @@ struct HomeView: View {
                         mixes: viewModel.displayedMixes,
                         startIndex: startIndex,
                         onDeleted: { _ in
-                            Task { await viewModel.loadMixes() }
+                            Task { await viewModel.loadMixes(modelContext: modelContext) }
                         }
                     )
                 case .createPhoto:
@@ -66,8 +68,6 @@ struct HomeView: View {
                     CreateEmbedPage()
                 case .createRecordAudio:
                     CreateRecordAudioPage()
-                case .createAppleMusic:
-                    CreateAppleMusicPage()
                 case .createText:
                     CreateTextPage()
                 }
@@ -75,14 +75,14 @@ struct HomeView: View {
             .onChange(of: viewModel.navigationPath) { _, path in
                 if path.isEmpty {
                     Task {
-                        await viewModel.loadMixes()
-                        await viewModel.loadTags()
+                        await viewModel.loadMixes(modelContext: modelContext)
+                        viewModel.loadTags(modelContext: modelContext)
                     }
                 }
             }
             .task {
-                await viewModel.loadMixes()
-                await viewModel.loadTags()
+                await viewModel.loadMixes(modelContext: modelContext)
+                viewModel.loadTags(modelContext: modelContext)
                 await viewModel.loadSavedViews()
             }
         }
@@ -95,7 +95,10 @@ extension HomeView {
     @ViewBuilder
     private var mainContent: some View {
         if viewModel.isLoading && viewModel.mixes.isEmpty {
-            ProgressView()
+            VStack(spacing: 12) {
+                ProgressView()
+                syncStatusText
+            }
         } else {
             VStack(spacing: 0) {
                 if !isSearchMode {
@@ -128,11 +131,14 @@ extension HomeView {
             .padding(.horizontal, 8)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar
+            VStack(spacing: 0) {
+                MiniPlayerBar(coordinator: audioCoordinator).animated()
+                bottomBar
+            }
         }
         .refreshable {
-            await viewModel.loadMixes()
-            await viewModel.loadTags()
+            await viewModel.loadMixes(modelContext: modelContext)
+            viewModel.loadTags(modelContext: modelContext)
             await viewModel.loadSavedViews()
         }
     }
@@ -162,7 +168,34 @@ extension HomeView {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar
+            VStack(spacing: 0) {
+                MiniPlayerBar(coordinator: audioCoordinator).animated()
+                bottomBar
+            }
+        }
+    }
+}
+
+// MARK: - Sync Status
+
+extension HomeView {
+    @ViewBuilder
+    private var syncStatusText: some View {
+        switch viewModel.syncEngine.syncStatus {
+        case .syncing:
+            Text("Syncing...")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .downloading(let current, let total):
+            Text("Downloading \(current)/\(total)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let message):
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
+        default:
+            EmptyView()
         }
     }
 }
@@ -241,6 +274,12 @@ extension HomeView {
 
     private var settingsMenu: some View {
         Menu {
+            Button {
+                audioCoordinator.playMixes(viewModel.displayedMixes)
+            } label: {
+                Label("Play All", systemImage: "play.fill")
+            }
+            Divider()
             Button("Disconnect", role: .destructive) {
                 viewModel.showDisconnectAlert = true
             }
@@ -325,9 +364,6 @@ extension HomeView {
                     }
                     Button { viewModel.navigationPath.append(.createRecordAudio) } label: {
                         Label("Record", systemImage: "mic")
-                    }
-                    Button { viewModel.navigationPath.append(.createAppleMusic) } label: {
-                        Label("Music", systemImage: "music.note")
                     }
                     Button { viewModel.navigationPath.append(.createText) } label: {
                         Label("Text", systemImage: "textformat")

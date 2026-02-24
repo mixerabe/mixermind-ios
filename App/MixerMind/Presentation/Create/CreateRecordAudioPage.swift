@@ -5,6 +5,7 @@ struct CreateRecordAudioPage: View {
     @State private var recorderViewModel = RecordAudioViewModel()
     @State private var isSaving = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         ZStack {
@@ -54,6 +55,7 @@ struct CreateRecordAudioPage: View {
         .navigationTitle("Record Audio")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .onAppear { createViewModel.modelContext = modelContext }
         .task {
             await recorderViewModel.requestPermission()
         }

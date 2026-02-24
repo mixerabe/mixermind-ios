@@ -6,13 +6,15 @@ struct CreateURLImportPage: View {
     @State private var isSaving = false
     @FocusState private var isFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     private var isDisabled: Bool { urlText.isEmpty || viewModel.isImportingURL }
+    private var isSpotify: Bool { MediaURLService.isSpotifyQuery(urlText) }
 
     var body: some View {
         VStack(spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Paste an Instagram or X link")
+                Text("Paste an Instagram, X, or Spotify link")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
@@ -53,30 +55,13 @@ struct CreateURLImportPage: View {
 
             Spacer()
 
-            HStack(spacing: 12) {
-                Button {
-                    importAndSave(mode: .video)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "square.and.arrow.down")
-                        Text("Video")
-                    }
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .frame(height: 48)
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(in: .capsule)
-                .disabled(isDisabled || isSaving)
-                .opacity((isDisabled || isSaving) ? 0.4 : 1)
-
+            if isSpotify {
                 Button {
                     importAndSave(mode: .audio)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "square.and.arrow.down")
-                        Text("Audio Only")
+                        Text("Download")
                     }
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
@@ -87,12 +72,51 @@ struct CreateURLImportPage: View {
                 .glassEffect(in: .capsule)
                 .disabled(isDisabled || isSaving)
                 .opacity((isDisabled || isSaving) ? 0.4 : 1)
+            } else {
+                HStack(spacing: 12) {
+                    Button {
+                        importAndSave(mode: .video)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Video")
+                        }
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(height: 48)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .capsule)
+                    .disabled(isDisabled || isSaving)
+                    .opacity((isDisabled || isSaving) ? 0.4 : 1)
+
+                    Button {
+                        importAndSave(mode: .audio)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Audio Only")
+                        }
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(height: 48)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .capsule)
+                    .disabled(isDisabled || isSaving)
+                    .opacity((isDisabled || isSaving) ? 0.4 : 1)
+                }
             }
         }
         .padding()
         .navigationTitle("Import Media")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { isFocused = true }
+        .onAppear {
+            viewModel.modelContext = modelContext
+            isFocused = true
+        }
     }
 
     private func importAndSave(mode: CreateMixViewModel.ImportMode) {

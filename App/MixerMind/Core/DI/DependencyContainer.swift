@@ -21,6 +21,14 @@ final class DependencyContainer {
         container.register(SavedViewRepository.self) { _ in
             SavedViewRepository()
         }.inObjectScope(.container)
+
+        container.register(AudioPlaybackCoordinator.self) { _ in
+            AudioPlaybackCoordinator()
+        }.inObjectScope(.container)
+
+        container.register(SyncEngine.self) { _ in
+            SyncEngine()
+        }.inObjectScope(.container)
     }
 
     func resolve<T>() -> T {

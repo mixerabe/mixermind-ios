@@ -1,9 +1,10 @@
 import SwiftUI
+import SwiftData
 
 enum HomeDestination: Hashable {
     case viewer(startIndex: Int)
     case createPhoto, createURLImport, createEmbed
-    case createRecordAudio, createAppleMusic, createText
+    case createRecordAudio, createText
 }
 
 @Observable @MainActor
@@ -107,13 +108,14 @@ final class HomeViewModel {
         isSearchActive = true
         isSearching = true
 
+        let tagFilter = selectedTagIds
         searchTask = Task {
             // Debounce: wait 300ms before searching
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
 
             do {
-                let results = try await SearchService.search(query: trimmed)
+                let results = try await SearchService.search(query: trimmed, tagIds: tagFilter)
                 guard !Task.isCancelled else { return }
                 self.searchResults = results
             } catch {
@@ -142,34 +144,49 @@ final class HomeViewModel {
     private let repo: MixRepository = resolve()
     private let tagRepo: TagRepository = resolve()
     private let savedViewRepo: SavedViewRepository = resolve()
+    let syncEngine: SyncEngine = resolve()
 
-    func loadMixes() async {
+    func loadMixes(modelContext: ModelContext) async {
         isLoading = true
         errorMessage = nil
+
+        // Sync with Supabase (downloads new media, removes deleted)
+        await syncEngine.sync(modelContext: modelContext)
+
+        // Read from SwiftData
         do {
-            mixes = try await repo.listMixes()
+            let descriptor = FetchDescriptor<LocalMix>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+            let localMixes = try modelContext.fetch(descriptor)
+            mixes = localMixes.map { $0.toMix() }
         } catch {
-            errorMessage = error.localizedDescription
+            // Fallback: try direct from Supabase
+            do {
+                mixes = try await repo.listMixes()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
         isLoading = false
     }
 
-    func loadTags() async {
+    func loadTags(modelContext: ModelContext) {
         do {
-            let tags = try await tagRepo.listTags()
-            allTags = tags
+            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
+            allTags = localTags.map { $0.toTag() }
 
-            let allRows: [MixTagRow] = try await tagRepo.allMixTagRows()
+            let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
             var map: [UUID: Set<UUID>] = [:]
-            for row in allRows {
+            for row in localMixTags {
                 map[row.mixId, default: []].insert(row.tagId)
             }
             mixTagMap = map
 
-            let validIds = Set(tags.map(\.id))
+            let validIds = Set(allTags.map(\.id))
             selectedTagIds.formIntersection(validIds)
 
-            let tagLookup = Dictionary(uniqueKeysWithValues: tags.map { ($0.id, $0) })
+            let tagLookup = Dictionary(uniqueKeysWithValues: allTags.map { ($0.id, $0) })
             for i in mixes.indices {
                 let tagIds = mixTagMap[mixes[i].id] ?? []
                 mixes[i].tags = tagIds.compactMap { tagLookup[$0] }

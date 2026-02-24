@@ -81,15 +81,6 @@ enum ContentService {
         return parts.joined(separator: " — ")
     }
 
-    // MARK: - Build content from Apple Music metadata
-
-    static func fromAppleMusic(title: String?, artist: String?) -> String {
-        var parts: [String] = []
-        if let title, !title.isEmpty { parts.append(title) }
-        if let artist, !artist.isEmpty { parts.append("by \(artist)") }
-        return parts.joined(separator: " ")
-    }
-
     // MARK: - Models
 
     private struct ContentResponse: Decodable {

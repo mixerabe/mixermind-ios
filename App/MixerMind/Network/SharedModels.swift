@@ -9,7 +9,6 @@ enum MixType: String, Codable, Equatable {
     case `import`
     case embed
     case audio
-    case appleMusic = "apple_music"
 }
 
 // MARK: - Mix
@@ -46,11 +45,45 @@ struct Mix: Codable, Identifiable, Hashable {
     // Audio
     let audioUrl: String?
 
-    // Apple Music
-    let appleMusicId: String?
-    let appleMusicTitle: String?
-    let appleMusicArtist: String?
-    let appleMusicArtworkUrl: String?
+    init(
+        id: UUID,
+        type: MixType,
+        createdAt: Date,
+        title: String? = nil,
+        tags: [Tag] = [],
+        textContent: String? = nil,
+        ttsAudioUrl: String? = nil,
+        photoUrl: String? = nil,
+        photoThumbnailUrl: String? = nil,
+        videoUrl: String? = nil,
+        videoThumbnailUrl: String? = nil,
+        importSourceUrl: String? = nil,
+        importMediaUrl: String? = nil,
+        importThumbnailUrl: String? = nil,
+        importAudioUrl: String? = nil,
+        embedUrl: String? = nil,
+        embedOg: OGMetadata? = nil,
+        audioUrl: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.createdAt = createdAt
+        self.title = title
+        self.tags = tags
+        self.textContent = textContent
+        self.ttsAudioUrl = ttsAudioUrl
+        self.photoUrl = photoUrl
+        self.photoThumbnailUrl = photoThumbnailUrl
+        self.videoUrl = videoUrl
+        self.videoThumbnailUrl = videoThumbnailUrl
+        self.importSourceUrl = importSourceUrl
+        self.importMediaUrl = importMediaUrl
+        self.importThumbnailUrl = importThumbnailUrl
+        self.importAudioUrl = importAudioUrl
+        self.embedUrl = embedUrl
+        self.embedOg = embedOg
+        self.audioUrl = audioUrl
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, type, title // tags excluded — populated locally
@@ -68,10 +101,6 @@ struct Mix: Codable, Identifiable, Hashable {
         case embedUrl = "embed_url"
         case embedOg = "embed_og"
         case audioUrl = "audio_url"
-        case appleMusicId = "apple_music_id"
-        case appleMusicTitle = "apple_music_title"
-        case appleMusicArtist = "apple_music_artist"
-        case appleMusicArtworkUrl = "apple_music_artwork_url"
     }
 }
 
@@ -91,6 +120,17 @@ struct OGMetadata: Codable, Hashable {
 
 // MARK: - Create Mix Payload
 
+/// pgvector expects a string like "[0.1,0.2,...]" via PostgREST
+struct PgVector: Encodable {
+    let values: [Double]
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        let str = "[" + values.map { String($0) }.joined(separator: ",") + "]"
+        try container.encode(str)
+    }
+}
+
 struct CreateMixPayload: Encodable {
     let type: MixType
     var title: String? = nil
@@ -107,11 +147,8 @@ struct CreateMixPayload: Encodable {
     var embedUrl: String? = nil
     var embedOg: OGMetadata? = nil
     var audioUrl: String? = nil
-    var appleMusicId: String? = nil
-    var appleMusicTitle: String? = nil
-    var appleMusicArtist: String? = nil
-    var appleMusicArtworkUrl: String? = nil
     var content: String? = nil
+    var contentEmbedding: PgVector? = nil
 
     enum CodingKeys: String, CodingKey {
         case type, title, content
@@ -128,10 +165,7 @@ struct CreateMixPayload: Encodable {
         case embedUrl = "embed_url"
         case embedOg = "embed_og"
         case audioUrl = "audio_url"
-        case appleMusicId = "apple_music_id"
-        case appleMusicTitle = "apple_music_title"
-        case appleMusicArtist = "apple_music_artist"
-        case appleMusicArtworkUrl = "apple_music_artwork_url"
+        case contentEmbedding = "content_embedding"
     }
 }
 
@@ -150,11 +184,8 @@ struct UpdateMixPayload: Encodable {
     var embedUrl: String? = nil
     var embedOg: OGMetadata? = nil
     var audioUrl: String? = nil
-    var appleMusicId: String? = nil
-    var appleMusicTitle: String? = nil
-    var appleMusicArtist: String? = nil
-    var appleMusicArtworkUrl: String? = nil
     var content: String? = nil
+    var contentEmbedding: PgVector? = nil
 
     enum CodingKeys: String, CodingKey {
         case title, content
@@ -171,10 +202,7 @@ struct UpdateMixPayload: Encodable {
         case embedUrl = "embed_url"
         case embedOg = "embed_og"
         case audioUrl = "audio_url"
-        case appleMusicId = "apple_music_id"
-        case appleMusicTitle = "apple_music_title"
-        case appleMusicArtist = "apple_music_artist"
-        case appleMusicArtworkUrl = "apple_music_artwork_url"
+        case contentEmbedding = "content_embedding"
     }
 }
 

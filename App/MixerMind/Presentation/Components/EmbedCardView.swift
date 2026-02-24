@@ -31,24 +31,15 @@ struct EmbedCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             // OG image — large, fills the top
             if let imageUrlString = og?.imageUrl, let imageUrl = URL(string: imageUrlString) {
-                AsyncImage(url: imageUrl) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: 180)
-                            .clipped()
-                    case .failure:
-                        imagePlaceholder
-                    default:
-                        Color.white.opacity(0.08)
-                            .frame(height: 180)
-                            .overlay {
-                                ProgressView()
-                                    .tint(.white.opacity(0.3))
-                            }
-                    }
+                LocalAsyncImage(url: imageUrl) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(height: 180)
+                        .clipped()
+                } placeholder: {
+                    Color.white.opacity(0.08)
+                        .frame(height: 180)
                 }
             } else {
                 imagePlaceholder

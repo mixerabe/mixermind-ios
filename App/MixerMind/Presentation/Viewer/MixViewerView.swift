@@ -1,9 +1,11 @@
 import SwiftUI
+import SwiftData
 import AVFoundation
 
 struct MixViewerView: View {
     @State private var viewModel: MixViewerViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     var onDeleted: ((UUID) -> Void)?
 
@@ -17,7 +19,6 @@ struct MixViewerView: View {
     // Title editing
     @State private var titleDraft = ""
     @State private var isEditingTitle = false
-    @State private var wasPausedBeforeTitleEdit = false
 
     // Tag editing
     @State private var showNewTagSheet = false
@@ -36,14 +37,18 @@ struct MixViewerView: View {
         .toolbar {
             viewerToolbarItems
         }
-        .fullScreenCover(isPresented: $isEditingTitle) {
-            TitleEditOverlayView(
+        .sheet(isPresented: $isEditingTitle) {
+            TitleEditSheet(
                 title: $titleDraft,
-                onCommit: commitTitle
+                onDone: commitTitle,
+                onCancel: cancelTitleEdit
             )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.hidden)
             .interactiveDismissDisabled()
         }
         .onAppear {
+            viewModel.modelContext = modelContext
             viewModel.onAppear()
             viewModel.loadAllTags()
         }
@@ -83,7 +88,6 @@ struct MixViewerView: View {
         .scrollTargetBehavior(.paging)
         .scrollIndicators(.hidden)
         .scrollPosition(id: $viewModel.scrolledID, anchor: .top)
-        .scrollDisabled(isEditingTitle)
         .ignoresSafeArea(edges: .top)
         .ignoresSafeArea(.keyboard)
         .onScrollPhaseChange { _, newPhase in
@@ -200,9 +204,6 @@ struct MixViewerView: View {
             mediaUrl: mediaUrl,
             thumbnailUrl: thumbnailUrl,
             videoPlayer: isCurrent ? viewModel.videoPlayer : nil,
-            appleMusicTitle: mix.appleMusicTitle,
-            appleMusicArtist: mix.appleMusicArtist,
-            appleMusicArtworkUrl: mix.appleMusicArtworkUrl,
             embedUrl: mix.embedUrl,
             embedOg: mix.embedOg,
             onEmbedTap: {
@@ -247,69 +248,65 @@ struct MixViewerView: View {
         .padding(.horizontal, 16)
         .frame(height: 44)
         .glassEffect(in: .capsule)
-        .onChange(of: viewModel.scrolledID) { _, _ in
-            cancelTitleEdit()
-        }
     }
 
     private func beginTitleEdit() {
         titleDraft = viewModel.currentMix.title ?? ""
-        wasPausedBeforeTitleEdit = viewModel.isPaused
-        if !viewModel.isPaused { viewModel.togglePause() }
         isEditingTitle = true
     }
 
     private func commitTitle() {
         let text = titleDraft
         isEditingTitle = false
-        if !wasPausedBeforeTitleEdit, viewModel.isPaused { viewModel.togglePause() }
         Task { await viewModel.saveTitle(text) }
     }
 
     private func cancelTitleEdit() {
         isEditingTitle = false
-        if !wasPausedBeforeTitleEdit, viewModel.isPaused { viewModel.togglePause() }
     }
 }
 
-private struct TitleEditOverlayView: View {
+private struct TitleEditSheet: View {
     @Binding var title: String
-    let onCommit: () -> Void
+    var onDone: () -> Void
+    var onCancel: () -> Void
 
-    @FocusState private var titleFieldFocused: Bool
+    @FocusState private var isFocused: Bool
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.black.opacity(0.5)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    onCommit()
-                }
-
-            TextField("Title", text: $title)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .focused($titleFieldFocused)
-                .textFieldStyle(.plain)
-                .submitLabel(.done)
-                .onSubmit {
-                    onCommit()
-                }
-                .onChange(of: title) { _, newValue in
-                    if newValue.count > 50 {
-                        title = String(newValue.prefix(50))
+        NavigationStack {
+            VStack {
+                TextField("Title", text: $title)
+                    .focused($isFocused)
+                    .textFieldStyle(.plain)
+                    .font(.body)
+                    .padding()
+                    .glassEffect(in: .rect(cornerRadius: 12))
+                    .submitLabel(.done)
+                    .onSubmit { onDone() }
+                    .onChange(of: title) { _, newValue in
+                        if newValue.count > 50 {
+                            title = String(newValue.prefix(50))
+                        }
                     }
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Edit Title")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }
                 }
-                .padding(.horizontal, 16)
-                .frame(height: 44)
-                .glassEffect(in: .capsule)
-                .padding(.horizontal, 40)
-                .padding(.top, 52)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { onDone() }
+                        .fontWeight(.semibold)
+                }
+            }
         }
-        .ignoresSafeArea(.keyboard)
         .onAppear {
-            titleFieldFocused = true
+            isFocused = true
         }
     }
 }

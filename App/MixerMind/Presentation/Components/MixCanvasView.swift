@@ -9,9 +9,6 @@ struct MixCanvasView: View {
     let mediaUrl: String?
     let thumbnailUrl: String?
     let videoPlayer: AVPlayer?
-    let appleMusicTitle: String?
-    let appleMusicArtist: String?
-    let appleMusicArtworkUrl: String?
     let embedUrl: String?
     let embedOg: OGMetadata?
     let onEmbedTap: (() -> Void)?
@@ -101,10 +98,6 @@ struct MixCanvasView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if hasText { textOverlay }
 
-        case .appleMusic:
-            appleMusicCanvas
-            if hasText { textOverlay }
-
         case .embed:
             if hasText { textOverlay }
 
@@ -140,12 +133,12 @@ struct MixCanvasView: View {
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let urlString = thumbnailUrl, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                }
+            LocalAsyncImage(url: url) { image in
+                image
+                    .resizable()
+                    .scaledToFit()
+            } placeholder: {
+                EmptyView()
             }
         }
     }
@@ -160,51 +153,14 @@ struct MixCanvasView: View {
                 .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let urlString = mediaUrl, let url = URL(string: urlString) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image
-                        .resizable()
-                        .scaledToFit()
-                }
-            }
-        }
-    }
-
-    // MARK: - Apple Music Canvas
-
-    private var appleMusicCanvas: some View {
-        VStack(spacing: 16) {
-            if let thumb = mediaThumbnail {
-                Image(uiImage: thumb)
+            LocalAsyncImage(url: url) { image in
+                image
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 200, height: 200)
-                    .clipShape(.rect(cornerRadius: 12))
-                    .shadow(radius: 8)
-            } else if let artworkUrl = appleMusicArtworkUrl, let url = URL(string: artworkUrl) {
-                AsyncImage(url: url) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 200, height: 200)
-                            .clipShape(.rect(cornerRadius: 12))
-                            .shadow(radius: 8)
-                    }
-                }
-            }
-            if let title = appleMusicTitle {
-                Text(title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-            if let artist = appleMusicArtist {
-                Text(artist)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
+            } placeholder: {
+                EmptyView()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Text Overlay
