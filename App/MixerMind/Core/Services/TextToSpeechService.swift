@@ -20,7 +20,7 @@ enum TextToSpeechService {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 60
+        request.timeoutInterval = 300
 
         let body: [String: String] = ["text": text, "voice": voice.rawValue]
         request.httpBody = try JSONEncoder().encode(body)

@@ -12,7 +12,9 @@ enum ScreenshotService {
         mediaThumbnail: UIImage?,
         embedUrl: String? = nil,
         embedOg: OGMetadata? = nil,
-        embedImage: UIImage? = nil
+        embedImage: UIImage? = nil,
+        gradientTop: String? = nil,
+        gradientBottom: String? = nil
     ) -> UIImage? {
         let view = MixCanvasContent(
             mixType: mixType,
@@ -20,7 +22,9 @@ enum ScreenshotService {
             mediaThumbnail: mediaThumbnail,
             embedUrl: embedUrl,
             embedOg: embedOg,
-            embedImage: embedImage
+            embedImage: embedImage,
+            gradientTop: gradientTop,
+            gradientBottom: gradientBottom
         )
         .frame(width: canvasWidth, height: canvasHeight)
 
@@ -112,5 +116,130 @@ enum ScreenshotService {
         if length < 100 { return 22 }
         if length < 200 { return 18 }
         return 14
+    }
+
+    /// Extract dominant gradient colors from the top and bottom strips of a captured image.
+    /// Returns hex strings like "#1a1a2e".
+    static func extractGradients(from image: UIImage) -> (top: String, bottom: String) {
+        let topColor = image.dominantColor(in: .top) ?? UIColor(red: 0.1, green: 0.1, blue: 0.18, alpha: 1)
+        let bottomColor = image.dominantColor(in: .bottom) ?? UIColor(red: 0.09, green: 0.13, blue: 0.24, alpha: 1)
+        return (top: topColor.hexString, bottom: bottomColor.hexString)
+    }
+}
+
+// MARK: - Dominant Color Extraction
+
+private struct RGBColor {
+    let r, g, b: UInt8
+}
+
+enum ImageStrip {
+    case top
+    case bottom
+}
+
+extension UIImage {
+
+    /// Returns the dominant color from a horizontal strip at the top or bottom of the image.
+    func dominantColor(in strip: ImageStrip, rowCount: Int = 20, threshold: Double = 0.3) -> UIColor? {
+        guard let pixels = extractPixels(from: strip, rowCount: rowCount) else { return nil }
+        return findDominantColor(from: pixels, threshold: threshold)
+    }
+
+    // MARK: - Pixel Extraction
+
+    private func extractPixels(from strip: ImageStrip, rowCount: Int) -> [RGBColor]? {
+        guard let cgImage = self.cgImage else { return nil }
+
+        let imgW = cgImage.width
+        let imgH = cgImage.height
+        let stripHeight = min(rowCount, imgH)
+        guard stripHeight > 0, imgW > 0 else { return nil }
+
+        let originY: Int
+        switch strip {
+        case .top:    originY = 0
+        case .bottom: originY = imgH - stripHeight
+        }
+
+        let cropRect = CGRect(x: 0, y: originY, width: imgW, height: stripHeight)
+        guard let cropped = cgImage.cropping(to: cropRect),
+              let data = cropped.dataProvider?.data,
+              let ptr = CFDataGetBytePtr(data) else { return nil }
+
+        let bpp = cropped.bitsPerPixel / 8
+        let bpr = cropped.bytesPerRow
+        let w = cropped.width
+        let h = cropped.height
+        let sampling = 4 // sample every 4th pixel for speed
+
+        var colors: [RGBColor] = []
+        colors.reserveCapacity((w / sampling) * (h / sampling))
+
+        for y in stride(from: 0, to: h, by: sampling) {
+            for x in stride(from: 0, to: w, by: sampling) {
+                let i = y * bpr + x * bpp
+                colors.append(RGBColor(r: ptr[i], g: ptr[i + 1], b: ptr[i + 2]))
+            }
+        }
+        return colors
+    }
+
+    // MARK: - Iterative Quantization
+
+    /// Finds the dominant color by progressively coarsening quantization until a bucket
+    /// exceeds the threshold percentage, then returns the true average of pixels in that bucket.
+    private func findDominantColor(from pixels: [RGBColor], threshold: Double) -> UIColor? {
+        guard !pixels.isEmpty else { return nil }
+
+        var bestKey: Int?
+        var bestShift = 0
+
+        for shift in 0...7 {
+            var counts: [Int: Int] = [:]
+            for p in pixels {
+                let key = (Int(p.r) >> shift) << 16 | (Int(p.g) >> shift) << 8 | (Int(p.b) >> shift)
+                counts[key, default: 0] += 1
+            }
+            guard let top = counts.max(by: { $0.value < $1.value }) else { continue }
+            if Double(top.value) / Double(pixels.count) >= threshold {
+                bestKey = top.key
+                bestShift = shift
+                break
+            }
+        }
+
+        guard let winningKey = bestKey else { return .white }
+
+        // Average the actual pixel values in the winning bucket
+        var sumR = 0, sumG = 0, sumB = 0, count = 0
+        for p in pixels {
+            let key = (Int(p.r) >> bestShift) << 16 | (Int(p.g) >> bestShift) << 8 | (Int(p.b) >> bestShift)
+            if key == winningKey {
+                sumR += Int(p.r); sumG += Int(p.g); sumB += Int(p.b)
+                count += 1
+            }
+        }
+        guard count > 0 else { return .white }
+
+        return UIColor(
+            red: CGFloat(sumR / count) / 255,
+            green: CGFloat(sumG / count) / 255,
+            blue: CGFloat(sumB / count) / 255,
+            alpha: 1
+        )
+    }
+}
+
+// MARK: - UIColor → Hex
+
+extension UIColor {
+    var hexString: String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        let ri = Int(round(r * 255))
+        let gi = Int(round(g * 255))
+        let bi = Int(round(b * 255))
+        return String(format: "#%02x%02x%02x", ri, gi, bi)
     }
 }

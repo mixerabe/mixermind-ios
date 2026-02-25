@@ -10,15 +10,26 @@ struct MixCanvasContent: View {
     var embedUrl: String? = nil
     var embedOg: OGMetadata? = nil
     var embedImage: UIImage? = nil
+    var gradientTop: String? = nil
+    var gradientBottom: String? = nil
 
     private var hasText: Bool { !textContent.isEmpty }
     private var hasEmbed: Bool { !(embedUrl ?? "").isEmpty }
 
-    private static let darkBg = Color(red: 0.08, green: 0.08, blue: 0.08)
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [
+                Color(hex: gradientTop ?? "#1a1a2e"),
+                Color(hex: gradientBottom ?? "#16213e")
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
 
     var body: some View {
         ZStack {
-            Self.darkBg
+            backgroundGradient
 
             switch mixType {
             case .video, .photo, .import:

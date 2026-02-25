@@ -23,6 +23,7 @@ struct MixViewerView: View {
     @State private var isEditingTitle = false
 
 
+
     private var chromeOpacity: Double {
         max(1 - dragProgress * 3, 0) // Fades out quickly in first third of drag
     }
@@ -58,7 +59,7 @@ struct MixViewerView: View {
                 onDone: commitTitle,
                 onCancel: cancelTitleEdit
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.large])
             .presentationDragIndicator(.hidden)
             .interactiveDismissDisabled()
         }
@@ -88,9 +89,9 @@ struct MixViewerView: View {
             Button("Delete", role: .destructive) {
                 Task {
                     let mixId = viewModel.currentMix.id
-                    let success = await viewModel.deleteCurrentMix()
-                    if success {
-                        onDeleted?(mixId)
+                    let hasMore = await viewModel.deleteCurrentMix()
+                    onDeleted?(mixId)
+                    if !hasMore {
                         onDismiss()
                     }
                 }
@@ -190,6 +191,7 @@ struct MixViewerView: View {
             }
         }
         .frame(width: canvasSize.width, height: miniVisibleCanvasHeight)
+        .contentShape(.rect)
     }
 
     // MARK: - Top Chrome (replaces toolbar)
@@ -234,8 +236,8 @@ struct MixViewerView: View {
 
             Spacer()
 
-            // Right: minimize button
-            Button { onMinimize() } label: {
+            // Right: close button
+            Button { onDismiss() } label: {
                 Image(systemName: "xmark")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
@@ -374,40 +376,41 @@ private struct TitleEditSheet: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header with Cancel / Title / Done
-            HStack {
-                Button("Cancel") { onCancel() }
-                    .foregroundStyle(Color.accentColor)
+        NavigationStack {
+            VStack {
                 Spacer()
-                Text("Edit Title")
-                    .font(.headline)
+                TextField("Add title", text: $title)
+                    .focused($isFocused)
+                    .textFieldStyle(.plain)
+                    .font(.title2.weight(.medium))
+                    .multilineTextAlignment(.center)
+                    .submitLabel(.done)
+                    .onSubmit { onDone() }
+                    .onChange(of: title) { _, newValue in
+                        if newValue.count > 50 {
+                            title = String(newValue.prefix(50))
+                        }
+                    }
+                    .padding(.horizontal, 32)
                 Spacer()
-                Button("Done") { onDone() }
-                    .fontWeight(.semibold)
-                    .foregroundStyle(Color.accentColor)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 12)
-
-            TextField("Title", text: $title)
-                .focused($isFocused)
-                .textFieldStyle(.plain)
-                .font(.body)
-                .padding()
-                .glassEffect(in: .rect(cornerRadius: 12))
-                .submitLabel(.done)
-                .onSubmit { onDone() }
-                .onChange(of: title) { _, newValue in
-                    if newValue.count > 50 {
-                        title = String(newValue.prefix(50))
+            .navigationTitle("Title")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button { onCancel() } label: {
+                            Image(systemName: "xmark")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button { onDone() } label: {
+                            Image(systemName: "checkmark")
+                                .fontWeight(.semibold)
+                        }
                     }
                 }
-                .padding(.horizontal)
-
-            Spacer()
         }
-        .padding(.top, 8)
         .onAppear {
             isFocused = true
         }

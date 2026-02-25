@@ -20,10 +20,16 @@ struct HomeView: View {
     @State private var isExpandingFromMini = false
     @State private var miniDragOffset: CGSize = .zero
 
-    // Yellow rect test
-    @State private var showYellowRect = false
-    @State private var yellowDragScale: CGFloat = 1.0
-    @State private var yellowDragOffset: CGSize = .zero
+    // Hero expand animation state
+    @State private var heroMix: Mix?
+    @State private var heroSourceFrame: CGRect = .zero
+    @State private var heroExpanded = false
+    @State private var heroFinished = false
+
+
+    // Card frame tracking for hero animations
+    @State private var cardFrames: [UUID: CGRect] = [:]
+    @State private var ignoreCardTaps = false
 
     // Mini player card dimensions
     private static let miniCardWidth: CGFloat = 136
@@ -108,11 +114,11 @@ struct HomeView: View {
                 }
                 .onChange(of: viewModel.navigationPath) { _, path in
                     if path.isEmpty {
-                        Task {
-                            await viewModel.loadMixes(modelContext: modelContext)
-                            viewModel.loadTags(modelContext: modelContext)
-                        }
+                        viewModel.reloadFromLocal(modelContext: modelContext)
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .mixCreationStatusChanged)) { _ in
+                    viewModel.reloadFromLocal(modelContext: modelContext)
                 }
                 .task {
                     await viewModel.loadMixes(modelContext: modelContext)
@@ -121,48 +127,29 @@ struct HomeView: View {
                 }
             }
 
-            // Yellow test rect — 16:9, pinned to screen top, drag to scale
-            if showYellowRect {
-                let screen = UIScreen.main.bounds
-                let w = screen.width
-                let h = w * (17.0 / 9.0)
-
-                Color.yellow
-                    .frame(width: w, height: h)
-                    .scaleEffect(yellowDragScale)
-                    .offset(yellowDragOffset)
-                    .position(x: screen.width / 2, y: h / 2)
-                    .overlay(alignment: .leading) {
-                        Color.clear
-                            .frame(width: 44)
-                            .contentShape(Rectangle())
-                            .gesture(
-                                DragGesture()
-                                    .onChanged { value in
-                                        let dx = max(value.translation.width, 0)
-                                        let progress = min(dx / (screen.width * 0.5), 1.0)
-                                        yellowDragScale = 1.0 - progress * 0.6
-                                        yellowDragOffset = CGSize(width: dx * 0.5, height: value.translation.height)
-                                    }
-                                    .onEnded { _ in
-                                        withAnimation(.spring(duration: 0.3)) {
-                                            yellowDragScale = 1.0
-                                            yellowDragOffset = .zero
-                                        }
-                                    }
-                            )
-                    }
-                    .ignoresSafeArea()
-                    .zIndex(20)
-            }
-
             // Black backdrop — fully opaque when expanded, transparent when mini
-            if viewerVM != nil {
+            // Hidden during hero animation, shown instantly when hero finishes
+            if viewerVM != nil, (heroMix == nil || heroFinished) {
                 Color.black
                     .ignoresSafeArea()
                     .opacity(isViewerExpanded ? Double(viewerDragScale) : 0)
                     .animation(.spring(duration: 0.35), value: isViewerExpanded)
                     .zIndex(9)
+            }
+
+            // Hero expand overlay — card screenshot expanding to fullscreen
+            // Appears instantly at card position, animates to canvas position
+            // while the Y crop reduces from card crop to zero (full 9:17 image).
+            if let heroMix, !heroFinished, let url = heroMix.screenshotUrl {
+                HeroExpandOverlay(
+                    screenshotURL: URL(string: url)!,
+                    expanded: heroExpanded,
+                    sourceFrame: heroSourceFrame,
+                    previewScaleY: heroMix.previewScaleY ?? 1.0
+                )
+                .transition(.identity)
+                .ignoresSafeArea()
+                .zIndex(15)
             }
 
             // Viewer — position-based placement, drag scales from left edge
@@ -194,18 +181,19 @@ struct HomeView: View {
                     x: isViewerExpanded ? canvasW / 2 : miniTargetPosition.x,
                     y: isViewerExpanded ? canvasH / 2 : miniTargetPosition.y
                 )
-                .overlay(alignment: .leading) {
+                .overlay(alignment: .topLeading) {
                     if isViewerExpanded {
                         Color.clear
-                            .frame(width: 44)
+                            .frame(width: 44, height: canvasH - 44)
                             .contentShape(Rectangle())
                             .gesture(viewerDragGesture)
                     }
                 }
-                .allowsHitTesting(true)
+                .allowsHitTesting(heroMix == nil || heroFinished)
+                .opacity(heroMix != nil && !heroFinished ? 0 : 1)
                 .ignoresSafeArea()
                 .transition(.asymmetric(
-                    insertion: isExpandingFromMini ? .identity : .move(edge: .trailing),
+                    insertion: (isExpandingFromMini || heroMix != nil) ? .identity : .move(edge: .trailing),
                     removal: .identity
                 ))
                 .animation(.spring(duration: 0.35), value: isViewerExpanded)
@@ -240,6 +228,7 @@ struct HomeView: View {
                 }
             }
         }
+        .coordinateSpace(name: "home-root")
         .animation(.spring(duration: 0.35), value: isViewerExpanded)
     }
 
@@ -359,6 +348,7 @@ struct HomeView: View {
 
     private func expandFromMini() {
         isExpandingFromMini = true
+        miniPlayerCorner = .bottomTrailing
         withAnimation(.spring(duration: 0.35)) {
             isViewerExpanded = true
         }
@@ -368,21 +358,81 @@ struct HomeView: View {
     }
 
     private func openViewer(mixes: [Mix], startIndex: Int) {
-        // Dismiss any existing viewer first so SwiftUI recreates the view tree
         if viewerVM != nil {
-            audioCoordinator.stop()
-            viewerVM = nil
+            killViewer()
+            DispatchQueue.main.async {
+                performOpenViewer(mixes: mixes, startIndex: startIndex)
+            }
+        } else {
+            performOpenViewer(mixes: mixes, startIndex: startIndex)
         }
+    }
+
+    private func performOpenViewer(mixes: [Mix], startIndex: Int) {
+        miniPlayerCorner = .bottomTrailing
         let vm = MixViewerViewModel(mixes: mixes, startIndex: startIndex)
         viewerVM = vm
         withAnimation(.spring(duration: 0.35)) { isViewerExpanded = true }
     }
 
+    private func openViewerWithHero(mix: Mix, frame: CGRect, mixes: [Mix], startIndex: Int) {
+        if viewerVM != nil {
+            killViewer()
+            DispatchQueue.main.async {
+                performOpenViewerWithHero(mix: mix, frame: frame, mixes: mixes, startIndex: startIndex)
+            }
+        } else {
+            performOpenViewerWithHero(mix: mix, frame: frame, mixes: mixes, startIndex: startIndex)
+        }
+    }
+
+    private func performOpenViewerWithHero(mix: Mix, frame: CGRect, mixes: [Mix], startIndex: Int) {
+        // 1. Set hero state — appears instantly at card position
+        heroMix = mix
+        heroSourceFrame = frame
+        heroExpanded = false
+        heroFinished = false
+
+        // 2. Create viewer VM now so it has time to render while hero animates.
+        //    It's hidden behind the hero (zIndex 15 > 10).
+        let vm = MixViewerViewModel(mixes: mixes, startIndex: startIndex)
+        viewerVM = vm
+        isViewerExpanded = true
+
+        // 3. Next runloop: animate hero from card position → canvas position
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            withAnimation(.spring(duration: 0.25, bounce: 0.05)) {
+                heroExpanded = true
+            }
+        }
+
+        // 4. After animation completes: remove hero, viewer is already there
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            heroFinished = true
+            heroMix = nil
+        }
+    }
+
+    /// Instantly kill the current viewer with no animation.
+    private func killViewer() {
+        audioCoordinator.stop()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            viewerVM = nil
+            isViewerExpanded = false
+        }
+    }
+
     private func dismissViewer() {
+        ignoreCardTaps = true
         audioCoordinator.stop()
         withAnimation(.spring(duration: 0.35)) {
             viewerVM = nil
             isViewerExpanded = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            ignoreCardTaps = false
         }
     }
 
@@ -406,6 +456,14 @@ extension HomeView {
                 mixGrid
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if audioCoordinator.currentTrack != nil, viewerVM == nil {
+                    MiniPlayerBar(coordinator: audioCoordinator).animated()
+                }
+                bottomBar
+            }
+        }
         .overlay {
             if viewModel.isLoading && viewModel.mixes.isEmpty {
                 VStack(spacing: 12) {
@@ -423,22 +481,51 @@ extension HomeView {
             MasonryLayout(columns: 2, spacing: 8) {
                 ForEach(viewModel.displayedMixes) { mix in
                     MasonryMixCard(mix: mix)
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.onChange(of: geo.frame(in: .named("home-root"))) { _, frame in
+                                    cardFrames[mix.id] = frame
+                                }.onAppear {
+                                    cardFrames[mix.id] = geo.frame(in: .named("home-root"))
+                                }
+                            }
+                        }
+                        .contentShape(.rect)
                         .onTapGesture {
-                            let mixes = viewModel.displayedMixes
-                            let index = mixes.firstIndex(where: { $0.id == mix.id }) ?? 0
-                            openViewer(mixes: mixes, startIndex: index)
+                            guard !ignoreCardTaps else { return }
+                            if mix.creationStatus == "creating" { return }
+                            if mix.creationStatus == "failed" { return }
+                            let mixes = viewModel.displayedMixes.filter { $0.creationStatus == nil }
+                            guard let index = mixes.firstIndex(where: { $0.id == mix.id }) else { return }
+                            if mix.screenshotUrl != nil {
+                                openViewerWithHero(mix: mix, frame: cardFrames[mix.id] ?? .zero, mixes: mixes, startIndex: index)
+                            } else {
+                                openViewer(mixes: mixes, startIndex: index)
+                            }
+                        }
+                        .contextMenu {
+                            if mix.creationStatus == "failed" {
+                                Button {
+                                    let service: MixCreationService = resolve()
+                                    service.retry(mixId: mix.id, modelContext: modelContext)
+                                } label: {
+                                    Label("Retry", systemImage: "arrow.clockwise")
+                                }
+                            }
+                            Button(role: .destructive) {
+                                if mix.creationStatus != nil {
+                                    let service: MixCreationService = resolve()
+                                    service.discard(mixId: mix.id, modelContext: modelContext)
+                                } else {
+                                    Task { await viewModel.deleteMix(mix, modelContext: modelContext) }
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
                         }
                 }
             }
             .padding(.horizontal, 8)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if audioCoordinator.currentTrack != nil, viewerVM == nil {
-                    MiniPlayerBar(coordinator: audioCoordinator).animated()
-                }
-                bottomBar
-            }
         }
         .refreshable {
             await viewModel.loadMixes(modelContext: modelContext)
@@ -452,7 +539,7 @@ extension HomeView {
             if viewModel.isSearching {
                 ProgressView()
                     .padding(.top, 40)
-            } else if viewModel.searchResults.isEmpty && !searchText.isEmpty {
+            } else if viewModel.searchResultIds.isEmpty && !searchText.isEmpty {
                 ContentUnavailableView.search(text: searchText)
                     .padding(.top, 40)
             } else {
@@ -460,22 +547,36 @@ extension HomeView {
                 MasonryLayout(columns: 2, spacing: 8) {
                     ForEach(searchMixes) { mix in
                         MasonryMixCard(mix: mix)
+                            .background {
+                                GeometryReader { geo in
+                                    Color.clear.onChange(of: geo.frame(in: .named("home-root"))) { _, frame in
+                                        cardFrames[mix.id] = frame
+                                    }.onAppear {
+                                        cardFrames[mix.id] = geo.frame(in: .named("home-root"))
+                                    }
+                                }
+                            }
+                            .contentShape(.rect)
                             .onTapGesture {
+                                guard !ignoreCardTaps else { return }
                                 if let fullIndex = viewModel.mixes.firstIndex(where: { $0.id == mix.id }) {
-                                    openViewer(mixes: viewModel.mixes, startIndex: fullIndex)
+                                    if mix.screenshotUrl != nil {
+                                        openViewerWithHero(mix: mix, frame: cardFrames[mix.id] ?? .zero, mixes: viewModel.mixes, startIndex: fullIndex)
+                                    } else {
+                                        openViewer(mixes: viewModel.mixes, startIndex: fullIndex)
+                                    }
+                                }
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    Task { await viewModel.deleteMix(mix, modelContext: modelContext) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
                                 }
                             }
                     }
                 }
                 .padding(.horizontal, 8)
-            }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if audioCoordinator.currentTrack != nil, viewerVM == nil {
-                    MiniPlayerBar(coordinator: audioCoordinator).animated()
-                }
-                bottomBar
             }
         }
     }
@@ -579,9 +680,6 @@ extension HomeView {
 
     private var settingsMenu: some View {
         Menu {
-            Button("Show Yellow Rect") {
-                withAnimation { showYellowRect.toggle() }
-            }
             Button("Disconnect", role: .destructive) {
                 viewModel.showDisconnectAlert = true
             }
@@ -620,10 +718,10 @@ extension HomeView {
                         if !newValue.isEmpty {
                             isSearchMode = true
                         }
-                        viewModel.search(query: newValue)
+                        viewModel.search(query: newValue, modelContext: modelContext)
                     }
                     .onSubmit {
-                        viewModel.search(query: searchText)
+                        viewModel.search(query: searchText, modelContext: modelContext)
                     }
 
                 Button(action: clearSearchText) {
@@ -676,9 +774,9 @@ extension HomeView {
                         .foregroundStyle(.primary)
                         .frame(width: 52, height: 52)
                         .contentShape(Rectangle())
+                        .glassEffect(in: .circle)
                 }
                 .buttonStyle(.plain)
-                .glassEffect(in: .circle)
                 .opacity(isSearchMode ? 0 : 1)
                 .allowsHitTesting(!isSearchMode)
             }

@@ -29,6 +29,10 @@ final class DependencyContainer {
         container.register(SyncEngine.self) { _ in
             SyncEngine()
         }.inObjectScope(.container)
+
+        container.register(MixCreationService.self) { _ in
+            MixCreationService()
+        }.inObjectScope(.container)
     }
 
     func resolve<T>() -> T {

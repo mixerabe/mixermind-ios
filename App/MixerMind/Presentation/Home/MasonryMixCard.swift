@@ -60,6 +60,22 @@ struct MasonryMixCard: View {
             }
 
             titleSection
+
+            // Creation status overlay
+            if let status = mix.creationStatus {
+                ZStack {
+                    Color.black.opacity(0.3)
+                    if status == "creating" {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(0.8)
+                    } else if status == "failed" {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.title3)
+                    }
+                }
+            }
         }
         .clipShape(.rect(cornerRadius: 12))
     }

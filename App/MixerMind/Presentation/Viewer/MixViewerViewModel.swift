@@ -13,6 +13,7 @@ final class MixViewerViewModel {
     var tagsForCurrentMix: [Tag] = []
     var allTags: [Tag] = []
     var isAutoScroll = false
+    private var isDeleting = false
 
     var videoPlayer: AVPlayer?
     var videoProgress: Double = 0
@@ -54,7 +55,7 @@ final class MixViewerViewModel {
     }
 
     func onScrollChanged() {
-        guard let scrolledID, scrolledID != activeID else { return }
+        guard !isDeleting, let scrolledID, scrolledID != activeID else { return }
         stopVideoPlayback()
         activeID = scrolledID
         videoProgress = 0
@@ -62,7 +63,7 @@ final class MixViewerViewModel {
     }
 
     func onScrollIdle() {
-        guard pendingLoad else { return }
+        guard !isDeleting, pendingLoad else { return }
         pendingLoad = false
         coordinator.jumpToTrack(id: activeID?.uuidString ?? "")
         loadCurrentMix()
@@ -196,7 +197,8 @@ final class MixViewerViewModel {
     /// Called when coordinator's currentTrackIndex changes externally (lock screen, track finish).
     /// Scrolls the viewer to match and loads video.
     func syncFromCoordinator() {
-        guard let track = coordinator.currentTrack,
+        guard !isDeleting,
+              let track = coordinator.currentTrack,
               let mixId = UUID(uuidString: track.id),
               mixId != activeID else { return }
 
@@ -398,13 +400,54 @@ final class MixViewerViewModel {
 
     // MARK: - Delete
 
+    /// Deletes the current mix. Returns `true` if the viewer still has mixes to show,
+    /// `false` if it was the last one (caller should dismiss).
     func deleteCurrentMix() async -> Bool {
-        let mixId = currentMix.id
+        isDeleting = true
 
-        // Optimistic local delete
+        let mixId = currentMix.id
+        let currentIndex = mixes.firstIndex(where: { $0.id == mixId }) ?? 0
+
+        // 1. Figure out which mix to land on before removing
+        let nextId: UUID? = {
+            if mixes.count <= 1 { return nil }
+            if currentIndex + 1 < mixes.count {
+                return mixes[currentIndex + 1].id
+            }
+            return mixes[currentIndex - 1].id
+        }()
+
+        // 2. Scroll to the neighbor first (animated)
+        if let nextId {
+            stopVideoPlayback()
+            activeID = nextId
+            videoProgress = 0
+            // Reset scroll position so the binding recognizes the new target
+            // (after a previous delete, scrolledID may already equal the current position)
+            scrolledID = nil
+            withAnimation(.spring(duration: 0.35)) {
+                scrolledID = nextId
+            }
+        }
+
+        // 3. Wait for scroll animation, then remove the deleted mix from the array
+        try? await Task.sleep(for: .milliseconds(nextId != nil ? 400 : 0))
+
+        mixes.removeAll { $0.id == mixId }
+
+        // 4. Load the new current mix (video, tags)
+        if nextId != nil {
+            coordinator.loadQueue(mixes, startingAt: activeID)
+            loadCurrentMix()
+        }
+
+        // 5. Keep flag true until SwiftUI layout settles after array mutation
+        try? await Task.sleep(for: .milliseconds(300))
+        isDeleting = false
+
+        // 5. Delete from local storage
         if let modelContext {
             if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
-                // Delete local media files
                 let fileManager = LocalFileManager.shared
                 let paths = [
                     local.localTtsAudioPath, local.localPhotoPath, local.localPhotoThumbnailPath,
@@ -417,7 +460,6 @@ final class MixViewerViewModel {
                 }
                 modelContext.delete(local)
             }
-            // Delete mix_tag relationships
             if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
                 for row in rows where row.mixId == mixId {
                     modelContext.delete(row)
@@ -426,8 +468,9 @@ final class MixViewerViewModel {
             try? modelContext.save()
         }
 
-        // Fire-and-forget Supabase call
+        // 6. Fire-and-forget Supabase call
         Task { try? await repo.deleteMix(id: mixId) }
-        return true
+
+        return !mixes.isEmpty
     }
 }

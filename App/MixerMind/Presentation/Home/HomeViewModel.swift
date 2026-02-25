@@ -88,17 +88,17 @@ final class HomeViewModel {
 
     // MARK: - Search
 
-    var searchResults: [SearchService.SearchResult] = []
+    var searchResultIds: [UUID] = []
     var isSearching = false
     var isSearchActive = false
     private var searchTask: Task<Void, Never>?
 
-    func search(query: String) {
+    func search(query: String, modelContext: ModelContext) {
         searchTask?.cancel()
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            searchResults = []
+            searchResultIds = []
             isSearching = false
             isSearchActive = false
             return
@@ -108,18 +108,24 @@ final class HomeViewModel {
         isSearching = true
 
         let tagFilter = selectedTagIds
+        let tagMap = mixTagMap
         searchTask = Task {
             // Debounce: wait 300ms before searching
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
 
             do {
-                let results = try await SearchService.search(query: trimmed, tagIds: tagFilter)
+                let results = try await SearchService.search(
+                    query: trimmed,
+                    tagIds: tagFilter,
+                    mixTagMap: tagMap,
+                    modelContext: modelContext
+                )
                 guard !Task.isCancelled else { return }
-                self.searchResults = results
+                self.searchResultIds = results.map(\.id)
             } catch {
                 guard !Task.isCancelled else { return }
-                self.searchResults = []
+                self.searchResultIds = []
             }
             self.isSearching = false
         }
@@ -127,17 +133,15 @@ final class HomeViewModel {
 
     func clearSearch() {
         searchTask?.cancel()
-        searchResults = []
+        searchResultIds = []
         isSearching = false
         isSearchActive = false
     }
 
     /// Map search results to full Mix objects from the local cache for navigation
     var searchMixes: [Mix] {
-        let idSet = Set(searchResults.map(\.id))
-        let ordered = searchResults.map(\.id)
-        let mixLookup = Dictionary(uniqueKeysWithValues: mixes.filter { idSet.contains($0.id) }.map { ($0.id, $0) })
-        return ordered.compactMap { mixLookup[$0] }
+        let mixLookup = Dictionary(uniqueKeysWithValues: mixes.map { ($0.id, $0) })
+        return searchResultIds.compactMap { mixLookup[$0] }
     }
 
     private let repo: MixRepository = resolve()
@@ -152,13 +156,17 @@ final class HomeViewModel {
         // Sync with Supabase (downloads new media, removes deleted)
         await syncEngine.sync(modelContext: modelContext)
 
-        // Read from SwiftData
+        // Read from SwiftData (propagate creationStatus)
         do {
             let descriptor = FetchDescriptor<LocalMix>(
                 sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
             )
             let localMixes = try modelContext.fetch(descriptor)
-            mixes = localMixes.map { $0.toMix() }
+            mixes = localMixes.map { local in
+                var mix = local.toMix()
+                mix.creationStatus = local.creationStatus
+                return mix
+            }
         } catch {
             // Fallback: try direct from Supabase
             do {
@@ -168,6 +176,21 @@ final class HomeViewModel {
             }
         }
         isLoading = false
+    }
+
+    /// Fast local-only reload — no network. Used when returning from create page
+    /// and when background creation status changes.
+    func reloadFromLocal(modelContext: ModelContext) {
+        let descriptor = FetchDescriptor<LocalMix>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        guard let localMixes = try? modelContext.fetch(descriptor) else { return }
+        mixes = localMixes.map { local in
+            var mix = local.toMix()
+            mix.creationStatus = local.creationStatus
+            return mix
+        }
+        loadTags(modelContext: modelContext)
     }
 
     func loadTags(modelContext: ModelContext) {
@@ -195,6 +218,38 @@ final class HomeViewModel {
 
     func removeMix(id: UUID) {
         mixes.removeAll { $0.id == id }
+    }
+
+    func deleteMix(_ mix: Mix, modelContext: ModelContext) async {
+        let mixId = mix.id
+
+        // Remove from local array
+        mixes.removeAll { $0.id == mixId }
+
+        // Delete from SwiftData + local files
+        if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
+            let fileManager = LocalFileManager.shared
+            let paths = [
+                local.localTtsAudioPath, local.localPhotoPath, local.localPhotoThumbnailPath,
+                local.localVideoPath, local.localVideoThumbnailPath, local.localImportMediaPath,
+                local.localImportThumbnailPath, local.localImportAudioPath, local.localEmbedOgImagePath,
+                local.localAudioPath, local.localScreenshotPath,
+            ]
+            for path in paths {
+                if let path { fileManager.deleteFile(at: path) }
+            }
+            modelContext.delete(local)
+        }
+        if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
+            for row in rows where row.mixId == mixId {
+                modelContext.delete(row)
+            }
+        }
+        try? modelContext.save()
+
+        // Fire-and-forget Supabase
+        let repo: MixRepository = resolve()
+        Task { try? await repo.deleteMix(id: mixId) }
     }
 
     func toggleTag(_ tagId: UUID) {

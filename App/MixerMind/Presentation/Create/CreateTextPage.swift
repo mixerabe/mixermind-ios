@@ -3,7 +3,8 @@ import SwiftUI
 struct CreateTextPage: View {
     @State private var viewModel = CreateMixViewModel()
     @State private var isSaving = false
-    @FocusState private var titleFocused: Bool
+    @State private var isEditingTitle = false
+    @State private var titleDraft = ""
     @FocusState private var bodyFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -15,27 +16,16 @@ struct CreateTextPage: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                // Title field
-                titleField
-                    .padding(.horizontal)
+                // Live text canvas — tap to start editing, shrinks font as text grows
+                textCanvas
+                    .padding(.horizontal, 16)
                     .padding(.top, 12)
-
-                // Main text editor
-                TextEditor(text: Binding(
-                    get: { viewModel.textContent },
-                    set: { viewModel.textContent = $0 }
-                ))
-                .focused($bodyFocused)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 12)
-                .disabled(isSaving)
+                    .onTapGesture { bodyFocused = true }
 
                 Spacer(minLength: 0)
 
                 // Bottom send button
-                Button {
-                    save()
-                } label: {
+                Button { save() } label: {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
@@ -45,7 +35,7 @@ struct CreateTextPage: View {
                 .buttonStyle(.plain)
                 .glassEffect(in: .capsule)
                 .disabled(!canSend)
-                .opacity(!canSend ? 0.4 : 1)
+                .opacity(canSend ? 1 : 0.4)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
             }
@@ -71,56 +61,153 @@ struct CreateTextPage: View {
                 }
             }
         }
-        .navigationTitle("New Text")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                titleChipButton
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                sparklesToolbarButton
+            }
+        }
+        .sheet(isPresented: $isEditingTitle) {
+            RecordTitleEditSheet(
+                title: $titleDraft,
+                autoCreateTitle: $viewModel.autoCreateTitle,
+                onDone: {
+                    viewModel.title = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    isEditingTitle = false
+                },
+                onCancel: {
+                    titleDraft = viewModel.title
+                    isEditingTitle = false
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
+            .interactiveDismissDisabled()
+        }
         .onAppear {
             viewModel.modelContext = modelContext
             bodyFocused = true
         }
     }
 
-    // MARK: - Title Field
+    // MARK: - Navbar Title Chip
 
-    private var titleField: some View {
-        HStack(spacing: 8) {
-            TextField("Title", text: $viewModel.title)
-                .focused($titleFocused)
+    private var titleChipButton: some View {
+        Button {
+            titleDraft = viewModel.title
+            isEditingTitle = true
+        } label: {
+            HStack(spacing: 6) {
+                if viewModel.autoCreateTitle && viewModel.title.isEmpty {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.yellow.opacity(0.8))
+                }
+                Text(
+                    viewModel.title.isEmpty
+                        ? (viewModel.autoCreateTitle ? "Auto Title" : "Add title")
+                        : viewModel.title
+                )
                 .font(.subheadline.weight(.medium))
-                .textFieldStyle(.plain)
-                .onChange(of: viewModel.title) { _, newValue in
-                    if newValue.count > 50 {
-                        viewModel.title = String(newValue.prefix(50))
-                    }
-                    // Once user types in title, disable auto
-                    if !newValue.isEmpty {
-                        viewModel.autoCreateTitle = false
-                    }
-                }
+                .foregroundStyle(
+                    viewModel.title.isEmpty
+                        ? (viewModel.autoCreateTitle ? .yellow.opacity(0.7) : .white.opacity(0.4))
+                        : .white
+                )
+                .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(in: .capsule)
+    }
 
-            // Auto toggle — shown only when title is empty
-            if viewModel.title.isEmpty {
-                Button {
+    private var sparklesToolbarButton: some View {
+        Button {
+            withAnimation(.spring(duration: 0.25)) {
+                if viewModel.title.isEmpty {
                     viewModel.autoCreateTitle.toggle()
-                } label: {
-                    Text("Auto")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(viewModel.autoCreateTitle ? .white : .secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            viewModel.autoCreateTitle ? Color.accentColor : Color.clear,
-                            in: .capsule
-                        )
+                } else {
+                    titleDraft = viewModel.title
+                    isEditingTitle = true
                 }
-                .buttonStyle(.plain)
-                .glassEffect(in: .capsule)
-                .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                .animation(.easeInOut(duration: 0.2), value: viewModel.title.isEmpty)
+            }
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(
+                    viewModel.autoCreateTitle && viewModel.title.isEmpty
+                        ? .yellow
+                        : .white.opacity(0.4)
+                )
+                .frame(width: 34, height: 34)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(in: .circle)
+    }
+
+    // MARK: - Text Canvas
+
+    private var textCanvas: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                // Invisible TextEditor for input (full size, transparent)
+                TextEditor(text: Binding(
+                    get: { viewModel.textContent },
+                    set: { viewModel.textContent = $0 }
+                ))
+                .focused($bodyFocused)
+                .scrollContentBackground(.hidden)
+                .font(.system(size: dynamicFontSize, weight: .medium))
+                .foregroundStyle(.clear)   // text invisible — overlay renders it
+                .tint(.accentColor)
+                .disabled(isSaving)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // Visible text overlay (no scroll, just scales font)
+                if viewModel.textContent.isEmpty {
+                    Text("Start typing…")
+                        .font(.system(size: dynamicFontSize, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.2))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                } else {
+                    Text(viewModel.textContent)
+                        .font(.system(size: dynamicFontSize, weight: .medium))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 8)
+                        .animation(.easeOut(duration: 0.15), value: dynamicFontSize)
+                        .allowsHitTesting(false)
+                }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .glassEffect(in: .rect(cornerRadius: 10))
+        // Reserve space from below the navbar down to the send button (~80pt)
+        .frame(maxHeight: .infinity)
+    }
+
+    // MARK: - Dynamic Font Size
+
+    private var dynamicFontSize: CGFloat {
+        let len = viewModel.textContent.count
+        switch len {
+        case 0..<30:    return 32
+        case 30..<80:   return 26
+        case 80..<160:  return 22
+        case 160..<300: return 18
+        case 300..<500: return 15
+        default:        return 13
+        }
     }
 
     private var savingLabel: String {
@@ -134,11 +221,7 @@ struct CreateTextPage: View {
         viewModel.mixType = .text
         Task {
             let success = await viewModel.saveMix()
-            if success {
-                dismiss()
-            } else {
-                isSaving = false
-            }
+            if success { dismiss() } else { isSaving = false }
         }
     }
 }

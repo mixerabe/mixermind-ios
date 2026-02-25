@@ -9,7 +9,7 @@ final class MixRepository {
         return client
     }
 
-    /// All columns except `content`, `content_tsv`, and `content_embedding` (search-only).
+    /// All columns except `content_tsv` and `content_embedding` (pgvector search-only).
     private static let mixColumns = """
         id, type, created_at, title, \
         text_content, tts_audio_url, \
@@ -17,8 +17,9 @@ final class MixRepository {
         video_url, video_thumbnail_url, \
         import_source_url, import_media_url, import_thumbnail_url, import_audio_url, \
         embed_url, embed_og, \
-        audio_url, \
-        screenshot_url, preview_scale_y
+        audio_url, content, \
+        screenshot_url, preview_scale_y, \
+        gradient_top, gradient_bottom
         """
 
     // MARK: - CRUD

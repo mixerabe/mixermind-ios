@@ -47,7 +47,18 @@ final class LocalMix {
     var gradientTop: String?
     var gradientBottom: String?
 
+    // Search content (AI-generated description / transcript)
+    var searchContent: String?
+    // Local embedding from NLContextualEmbedding (encoded [Float])
+    var localEmbedding: Data?
+
     var isSynced: Bool = false
+
+    // Optimistic creation tracking
+    var creationStatus: String?       // nil = normal, "creating" = in progress, "failed" = failed
+    var creationRequestPath: String?  // Relative path to serialized MixCreationRequest JSON
+
+    var isBeingCreated: Bool { creationStatus != nil }
 
     init(mixId: UUID, type: String, createdAt: Date) {
         self.mixId = mixId
@@ -79,6 +90,8 @@ final class LocalMix {
         previewScaleY = mix.previewScaleY
         gradientTop = mix.gradientTop
         gradientBottom = mix.gradientBottom
+
+        searchContent = mix.content
 
         if let og = mix.embedOg {
             remoteEmbedOgJson = try? JSONEncoder().encode(og)

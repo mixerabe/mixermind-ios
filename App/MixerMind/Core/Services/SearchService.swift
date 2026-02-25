@@ -1,67 +1,56 @@
 import Foundation
-import Supabase
+import SwiftData
 
 enum SearchService {
 
-    struct SearchResult: Decodable {
+    struct SearchResult {
         let id: UUID
-        let type: MixType
-        let createdAt: Date
-        let title: String?
-        let photoThumbnailUrl: String?
-        let videoThumbnailUrl: String?
-        let importThumbnailUrl: String?
-        let embedOg: OGMetadata?
-
-        enum CodingKeys: String, CodingKey {
-            case id, type, title
-            case createdAt = "created_at"
-            case photoThumbnailUrl = "photo_thumbnail_url"
-            case videoThumbnailUrl = "video_thumbnail_url"
-            case importThumbnailUrl = "import_thumbnail_url"
-            case embedOg = "embed_og"
-        }
+        let similarity: Double
     }
 
-    private struct SearchRequest: Encodable {
-        let query: String
-        let limit: Int
-        let tagIds: [UUID]?
-
-        enum CodingKeys: String, CodingKey {
-            case query, limit
-            case tagIds = "tag_ids"
-        }
-    }
-
-    private struct EdgeFunctionResponse: Decodable {
-        let results: [SearchResult]
-    }
-
-    static func search(query: String, tagIds: Set<UUID> = []) async throws -> [SearchResult] {
-        guard let client = SupabaseManager.shared.client else {
-            throw SearchError.notConfigured
-        }
-
+    /// Perform local semantic search against all mixes in SwiftData.
+    /// Returns mix IDs ranked by cosine similarity to the query.
+    static func search(
+        query: String,
+        tagIds: Set<UUID> = [],
+        mixTagMap: [UUID: Set<UUID>] = [:],
+        modelContext: ModelContext,
+        limit: Int = 20
+    ) async throws -> [SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        let filterTagIds: [UUID]? = tagIds.isEmpty ? nil : Array(tagIds)
+        // 1. Embed the query locally
+        let queryEmbeddingData = try await EmbeddingService.generate(from: trimmed)
+        let queryVector = EmbeddingService.decode(queryEmbeddingData)
 
-        let response: EdgeFunctionResponse = try await client.functions.invoke(
-            "search",
-            options: .init(body: SearchRequest(query: trimmed, limit: 20, tagIds: filterTagIds))
-        )
-        return response.results
-    }
+        // 2. Fetch all local mixes that have embeddings
+        let descriptor = FetchDescriptor<LocalMix>()
+        let localMixes = try modelContext.fetch(descriptor)
 
-    enum SearchError: LocalizedError {
-        case notConfigured
+        // 3. Score each mix by cosine similarity
+        var scored: [SearchResult] = []
+        for mix in localMixes {
+            guard let embeddingData = mix.localEmbedding else { continue }
 
-        var errorDescription: String? {
-            switch self {
-            case .notConfigured: return "Supabase not configured"
+            // Tag filter: skip mixes that don't match all selected tags
+            if !tagIds.isEmpty {
+                let mixTags = mixTagMap[mix.mixId] ?? []
+                guard tagIds.isSubset(of: mixTags) else { continue }
+            }
+
+            let mixVector = EmbeddingService.decode(embeddingData)
+            let similarity = EmbeddingService.cosineSimilarity(queryVector, mixVector)
+
+            if similarity > 0.25 {
+                scored.append(SearchResult(id: mix.mixId, similarity: similarity))
             }
         }
+
+        // 4. Sort by similarity descending, take top results
+        return scored
+            .sorted { $0.similarity > $1.similarity }
+            .prefix(limit)
+            .map { $0 }
     }
 }

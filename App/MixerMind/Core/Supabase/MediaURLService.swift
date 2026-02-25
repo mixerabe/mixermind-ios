@@ -1,8 +1,6 @@
 import Foundation
 
-/// Resolves social media URLs to direct media stream URLs.
-/// YouTube: on-device via InnerTube (needs residential IP = your phone).
-/// Instagram/TikTok: via the Python backend (uses session cookies).
+/// Resolves social media URLs to direct media stream URLs via the Python backend.
 enum MediaURLService {
     struct Result {
         let platform: Platform
@@ -40,9 +38,7 @@ enum MediaURLService {
     static func resolve(_ urlString: String) async throws -> Result {
         let platform = detectPlatform(urlString)
         switch platform {
-        case .youtube:
-            return try await resolveYouTubeOnDevice(urlString)
-        case .instagram, .tiktok:
+        case .youtube, .instagram, .tiktok:
             return try await resolveViaBackend(urlString)
         case .spotify:
             // Spotify uses a separate download path — this shouldn't be called directly.
@@ -110,7 +106,7 @@ enum MediaURLService {
         detectPlatform(input) == .spotify
     }
 
-    // MARK: - Backend (Instagram / TikTok)
+    // MARK: - Backend (Instagram / YouTube / TikTok)
 
     private static func resolveViaBackend(_ urlString: String) async throws -> Result {
         guard let endpoint = URL(string: "\(Constants.backendURL)/api/media/resolve") else {
@@ -207,127 +203,4 @@ enum MediaURLService {
         return SpotifyResult(audioData: data, title: title, artist: artist, duration: duration)
     }
 
-    // MARK: - YouTube (On-Device InnerTube)
-
-    private static func extractYouTubeVideoId(_ url: String) -> String? {
-        if let range = url.range(of: #"youtu\.be/([A-Za-z0-9_-]{11})"#, options: .regularExpression) {
-            return String(url[range].suffix(11))
-        }
-        if let range = url.range(of: #"youtube\.com/shorts/([A-Za-z0-9_-]{11})"#, options: .regularExpression) {
-            return String(url[range].suffix(11))
-        }
-        if let range = url.range(of: #"[?&]v=([A-Za-z0-9_-]{11})"#, options: .regularExpression) {
-            return String(url[range].suffix(11))
-        }
-        return nil
-    }
-
-    private static func resolveYouTubeOnDevice(_ urlString: String) async throws -> Result {
-        guard let videoId = extractYouTubeVideoId(urlString) else {
-            throw MediaError.serverError("Could not extract YouTube video ID")
-        }
-
-        let playerURL = URL(string: "https://www.youtube.com/youtubei/v1/player")!
-
-        let body: [String: Any] = [
-            "videoId": videoId,
-            "context": [
-                "client": [
-                    "clientName": "ANDROID_VR",
-                    "clientVersion": "1.71.26",
-                    "deviceMake": "Oculus",
-                    "deviceModel": "Quest 3",
-                    "osName": "Android",
-                    "osVersion": "12L",
-                    "androidSdkVersion": 32,
-                    "hl": "en",
-                    "gl": "US",
-                ] as [String: Any]
-            ] as [String: Any],
-            "params": "CgIQBg==",
-        ]
-
-        var request = URLRequest(url: playerURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("com.google.android.apps.youtube.vr.oculus/1.71.26 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip", forHTTPHeaderField: "User-Agent")
-        request.setValue("2", forHTTPHeaderField: "X-Goog-Api-Format-Version")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.timeoutInterval = 15
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            let bodyPreview = String(data: data.prefix(200), encoding: .utf8) ?? ""
-            throw MediaError.serverError("YouTube HTTP \(statusCode): \(bodyPreview)")
-        }
-
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-
-        // Check playability
-        if let playability = json["playabilityStatus"] as? [String: Any],
-           let status = playability["status"] as? String,
-           status != "OK" {
-            let reason = playability["reason"] as? String
-                ?? (playability["messages"] as? [String])?.first
-                ?? status
-            throw MediaError.serverError("YouTube: \(reason)")
-        }
-
-        guard let streamingData = json["streamingData"] as? [String: Any] else {
-            throw MediaError.noMediaFound
-        }
-
-        let formats = streamingData["formats"] as? [[String: Any]] ?? []
-        let adaptiveFormats = streamingData["adaptiveFormats"] as? [[String: Any]] ?? []
-
-        // Pick best audio (prefer AAC/m4a for iOS)
-        let audioFormats = adaptiveFormats.filter { f in
-            f["url"] != nil &&
-            f["width"] == nil &&
-            (f["mimeType"] as? String)?.hasPrefix("audio/") == true
-        }
-        let bestAudio = audioFormats
-            .filter { ($0["mimeType"] as? String)?.contains("mp4") == true }
-            .sorted { ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0) }
-            .first ?? audioFormats.sorted { ($0["bitrate"] as? Int ?? 0) > ($1["bitrate"] as? Int ?? 0) }.first
-
-        // Pick best muxed video (has both audio+video)
-        let muxedFormats = formats.filter { f in
-            f["url"] != nil && (f["width"] != nil || f["height"] != nil)
-        }.sorted { ($0["height"] as? Int ?? 0) > ($1["height"] as? Int ?? 0) }
-
-        // Pick best adaptive video (H.264, ≤720p)
-        let videoAdaptive = adaptiveFormats.filter { f in
-            f["url"] != nil &&
-            (f["width"] != nil || f["height"] != nil) &&
-            (f["mimeType"] as? String)?.hasPrefix("audio/") != true &&
-            (f["height"] as? Int ?? 9999) <= 720
-        }
-        let bestAdaptiveVideo = videoAdaptive
-            .filter { ($0["mimeType"] as? String)?.contains("avc") == true }
-            .sorted { ($0["height"] as? Int ?? 0) > ($1["height"] as? Int ?? 0) }
-            .first ?? videoAdaptive.sorted { ($0["height"] as? Int ?? 0) > ($1["height"] as? Int ?? 0) }.first
-
-        let bestVideo = bestAdaptiveVideo ?? muxedFormats.first
-
-        guard bestVideo != nil || bestAudio != nil else {
-            throw MediaError.noMediaFound
-        }
-
-        let videoDetails = json["videoDetails"] as? [String: Any]
-        let title = videoDetails?["title"] as? String
-        let durationStr = videoDetails?["lengthSeconds"] as? String
-
-        return Result(
-            platform: .youtube,
-            originalURL: urlString,
-            videoURL: (bestVideo?["url"] as? String).flatMap(URL.init(string:)),
-            audioURL: (bestAudio?["url"] as? String).flatMap(URL.init(string:)),
-            thumbnailURL: URL(string: "https://img.youtube.com/vi/\(videoId)/hqdefault.jpg"),
-            title: title,
-            duration: durationStr.flatMap(Double.init)
-        )
-    }
 }

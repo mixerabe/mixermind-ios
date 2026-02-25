@@ -230,6 +230,26 @@ final class CreateMixViewModel {
         }
     }
 
+    /// Awaitable version — ensures thumbnail is ready before returning.
+    private func ensureVideoThumbnail(from data: Data) async {
+        guard videoThumbnail == nil else { return }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".mp4")
+        do {
+            try data.write(to: tempURL)
+        } catch { return }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let asset = AVURLAsset(url: tempURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let time = CMTime(seconds: 0, preferredTimescale: 600)
+        do {
+            let (cgImage, _) = try await generator.image(at: time)
+            self.videoThumbnail = UIImage(cgImage: cgImage)
+        } catch {}
+    }
+
     // MARK: - Audio File Loading & Playback
 
     func handleAudioResult(_ result: Result<[URL], Error>) {
@@ -585,7 +605,7 @@ final class CreateMixViewModel {
         mixType = .text
     }
 
-    // MARK: - Media Compression
+    // MARK: - Media Compression (used by performUpdate)
 
     private func compressVideo(data: Data) async throws -> Data {
         let inputURL = FileManager.default.temporaryDirectory
@@ -717,7 +737,6 @@ final class CreateMixViewModel {
         }
     }
 
-    /// Generate a silent AAC audio file of the given duration (for muted videos).
     private func generateSilence(duration: TimeInterval) throws -> Data {
         let sampleRate: Double = 44100
         let channels: AVAudioChannelCount = 1
@@ -730,7 +749,6 @@ final class CreateMixViewModel {
             throw CompressionError.exportFailed
         }
         buffer.frameLength = totalFrames
-        // Buffer is zero-initialized = silence
 
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "_silence.m4a")
@@ -750,7 +768,6 @@ final class CreateMixViewModel {
         return try Data(contentsOf: outputURL)
     }
 
-    /// Extract audio from video, or generate silence if the video has no audio track.
     private func extractOrGenerateSilence(from videoData: Data) async throws -> Data {
         do {
             return try await extractAudioFromVideo(data: videoData)
@@ -763,248 +780,154 @@ final class CreateMixViewModel {
     // MARK: - Save (Create or Update)
 
     func saveMix() async -> Bool {
-        isEditing ? await performUpdate() : await performCreate()
+        if isEditing {
+            return await performUpdate()
+        } else {
+            return await performCreate()
+        }
     }
 
     private func performCreate() async -> Bool {
-        isCreating = true
-        errorMessage = nil
-        do {
-            var payload = CreateMixPayload(type: mixType)
-
-            switch mixType {
-            case .text:
-                payload.textContent = hasText ? textContent : nil
-                // Generate TTS (non-fatal — save the mix even if TTS fails)
-                if hasText {
-                    isGeneratingTTS = true
-                    do {
-                        let ttsData = try await TextToSpeechService.synthesize(text: textContent)
-                        let ttsUrl = try await repo.uploadMedia(data: ttsData, fileName: "tts.mp3", contentType: "audio/mpeg")
-                        payload.ttsAudioUrl = ttsUrl
-                    } catch {
-                        // TTS failed — continue saving without audio
-                    }
-                    isGeneratingTTS = false
-                }
-            case .photo:
-                if var data = photoData {
-                    let url = try await repo.uploadMedia(data: data, fileName: "image.jpg", contentType: "image/jpeg")
-                    payload.photoUrl = url
-                    // Generate thumbnail
-                    if let thumb = photoThumbnail {
-                        let targetWidth: CGFloat = 300
-                        let scale = targetWidth / thumb.size.width
-                        let targetSize = CGSize(width: targetWidth, height: thumb.size.height * scale)
-                        let format = UIGraphicsImageRendererFormat()
-                        format.scale = 1.0
-                        let resized = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
-                            thumb.draw(in: CGRect(origin: .zero, size: targetSize))
-                        }
-                        if let thumbData = resized.jpegData(compressionQuality: 0.5) {
-                            let thumbUrl = try await repo.uploadMedia(data: thumbData, fileName: "photo_thumb.jpg", contentType: "image/jpeg")
-                            payload.photoThumbnailUrl = thumbUrl
-                        }
-                    }
-                }
-
-            case .video:
-                if let data = videoData {
-                    let compressed = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: compressed, fileName: "video.mp4", contentType: "video/mp4")
-                    payload.videoUrl = url
-                    if let thumb = videoThumbnail, let thumbData = thumb.jpegData(compressionQuality: 0.5) {
-                        let thumbUrl = try await repo.uploadMedia(data: thumbData, fileName: "video_thumb.jpg", contentType: "image/jpeg")
-                        payload.videoThumbnailUrl = thumbUrl
-                    }
-                    // Extract audio track (or generate silence for muted videos)
-                    let audioTrackData = try await extractOrGenerateSilence(from: data)
-                    let compressedAudio = try await compressAudio(data: audioTrackData)
-                    let audioUrl = try await repo.uploadMedia(data: compressedAudio, fileName: "video_audio.m4a", contentType: "audio/aac")
-                    payload.audioUrl = audioUrl
-                }
-
-            case .import:
-                payload.importSourceUrl = importSourceUrl
-                if let data = importMediaData {
-                    let compressed = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: compressed, fileName: "import_video.mp4", contentType: "video/mp4")
-                    payload.importMediaUrl = url
-                    if let thumb = videoThumbnail, let thumbData = thumb.jpegData(compressionQuality: 0.5) {
-                        let thumbUrl = try await repo.uploadMedia(data: thumbData, fileName: "import_thumb.jpg", contentType: "image/jpeg")
-                        payload.importThumbnailUrl = thumbUrl
-                    }
-                    // If no separate audio was provided, extract from the video
-                    if importAudioData == nil {
-                        importAudioData = try await extractOrGenerateSilence(from: data)
-                    }
-                }
-                if var data = importAudioData {
-                    data = try await compressAudio(data: data)
-                    let url = try await repo.uploadMedia(data: data, fileName: "import_audio.m4a", contentType: "audio/aac")
-                    payload.importAudioUrl = url
-                }
-
-            case .embed:
-                payload.embedUrl = embedUrl
-                if let imageData = embedOgImageData {
-                    let imageUrl = try await repo.uploadMedia(data: imageData, fileName: "embed_og.jpg", contentType: "image/jpeg")
-                    payload.embedOg = OGMetadata(
-                        title: embedOg?.title,
-                        description: embedOg?.description,
-                        imageUrl: imageUrl,
-                        host: embedOg?.host ?? ""
-                    )
-                } else {
-                    payload.embedOg = OGMetadata(
-                        title: embedOg?.title,
-                        description: embedOg?.description,
-                        imageUrl: nil,
-                        host: embedOg?.host ?? ""
-                    )
-                }
-
-            case .audio:
-                if var data = audioData {
-                    if isAudioFromTTS {
-                        let url = try await repo.uploadMedia(data: data, fileName: "audio.mp3", contentType: "audio/mpeg")
-                        payload.audioUrl = url
-                    } else {
-                        data = try await compressAudio(data: data)
-                        let url = try await repo.uploadMedia(data: data, fileName: "audio.m4a", contentType: "audio/aac")
-                        payload.audioUrl = url
-                    }
-                }
-            }
-
-            // Generate searchable content (non-fatal)
-            do {
-                switch mixType {
-                case .text:
-                    if hasText {
-                        payload.content = ContentService.fromText(textContent)
-                    }
-                case .photo:
-                    if let data = photoData {
-                        payload.content = try await ContentService.fromImage(imageData: data)
-                    }
-                case .video:
-                    // Audio transcription of video — extract audio track first
-                    if let data = videoData {
-                        let audioTrack = try await extractAudioFromVideo(data: data)
-                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "video_audio.m4a")
-                    }
-                case .import:
-                    // Prefer import audio if available, otherwise extract from video
-                    if let data = importAudioData {
-                        payload.content = try await ContentService.fromAudio(data: data, fileName: "import_audio.m4a")
-                    } else if let data = importMediaData {
-                        let audioTrack = try await extractAudioFromVideo(data: data)
-                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "import_audio.m4a")
-                    }
-                case .audio:
-                    if let data = audioData, !isAudioFromTTS {
-                        let name = audioFileName ?? "audio.m4a"
-                        let ct = name.hasSuffix(".mp3") ? "audio/mpeg" : "audio/m4a"
-                        payload.content = try await ContentService.fromAudio(data: data, fileName: name, contentType: ct)
-                    }
-                case .embed:
-                    payload.content = ContentService.fromEmbed(og: embedOg, url: embedUrl)
-                }
-            } catch {
-                // Content generation failed — continue saving without content
-            }
-
-            // Generate embedding from content (non-fatal)
-            if let contentText = payload.content, !contentText.isEmpty {
-                do {
-                    let embedding = try await EmbeddingService.generate(from: contentText)
-                    payload.contentEmbedding = PgVector(values: embedding)
-                } catch {
-                    // Embedding generation failed — continue saving without embedding
-                }
-            }
-
-            // Auto-generate title (non-fatal)
-            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedTitle.isEmpty {
-                payload.title = trimmedTitle
-            } else if autoCreateTitle {
-                isGeneratingTitle = true
-                do {
-                    let generated: String
-                    switch mixType {
-                    case .text:
-                        if hasText {
-                            generated = try await TitleService.fromText(textContent)
-                        } else { generated = "" }
-                    case .audio:
-                        if let data = audioData {
-                            let name = audioFileName ?? "audio.m4a"
-                            let ct = name.hasSuffix(".mp3") ? "audio/mpeg" : "audio/m4a"
-                            generated = try await TitleService.fromAudio(data: data, fileName: name, contentType: ct)
-                        } else { generated = "" }
-                    default:
-                        generated = ""
-                    }
-                    if !generated.isEmpty { payload.title = generated }
-                } catch {
-                    // Title generation failed — continue saving without title
-                }
-                isGeneratingTitle = false
-            }
-
-            // Capture screenshot (non-fatal)
-            do {
-                let thumbnail: UIImage? = switch mixType {
-                case .photo: photoThumbnail
-                case .video: videoThumbnail
-                case .import: importThumbnail ?? videoThumbnail
-                default: nil
-                }
-                let embedImg: UIImage? = if let data = embedOgImageData { UIImage(data: data) } else { nil }
-
-                if let screenshot = ScreenshotService.capture(
-                    mixType: mixType,
-                    textContent: textContent,
-                    mediaThumbnail: thumbnail,
-                    embedUrl: hasEmbed ? embedUrl : nil,
-                    embedOg: embedOg,
-                    embedImage: embedImg
-                ), let jpegData = screenshot.jpegData(compressionQuality: 0.7) {
-                    let screenshotUrl = try await repo.uploadMedia(data: jpegData, fileName: "screenshot.jpg", contentType: "image/jpeg")
-                    payload.screenshotUrl = screenshotUrl
-
-                    let scaleY = ScreenshotService.computeScaleY(
-                        mixType: mixType,
-                        textContent: textContent,
-                        mediaThumbnail: thumbnail,
-                        importHasVideo: importMediaData != nil,
-                        embedImage: embedImg,
-                        embedUrl: hasEmbed ? embedUrl : nil,
-                        embedOg: embedOg
-                    )
-                    payload.previewScaleY = scaleY
-                }
-            } catch {
-                // Screenshot capture/upload failed — continue without it
-            }
-
-            let createdMix = try await repo.createMix(payload)
-
-            if !selectedTagIds.isEmpty {
-                try? await tagRepo.setTagsForMix(mixId: createdMix.id, tagIds: selectedTagIds)
-            }
-
-            isCreating = false
-            return true
-        } catch {
-            isGeneratingTitle = false
-            isGeneratingTTS = false
-            isCreating = false
-            errorMessage = error.localizedDescription
+        guard let modelContext else {
+            errorMessage = "Internal error: no model context"
             return false
         }
+
+        let localFileManager = LocalFileManager.shared
+        let mixId = UUID()
+        let mixDir = mixId.uuidString
+
+        // Ensure mix directory exists
+        let dirURL = localFileManager.fileURL(for: mixDir)
+        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+
+        var request = MixCreationRequest(
+            mixId: mixId,
+            mixType: mixType,
+            createdAt: Date(),
+            textContent: hasText ? textContent : nil,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title.trimmingCharacters(in: .whitespacesAndNewlines),
+            autoCreateTitle: autoCreateTitle,
+            selectedTagIds: Array(selectedTagIds),
+            embedUrl: hasEmbed ? embedUrl : nil,
+            importSourceUrl: importSourceUrl,
+            isAudioFromTTS: isAudioFromTTS,
+            audioFileName: audioFileName
+        )
+
+        // Encode OG metadata if present
+        if let og = embedOg {
+            request.embedOgJson = try? JSONEncoder().encode(og)
+        }
+
+        // Helper: write small data to disk (thumbnails, screenshots only)
+        func writeSmall(_ data: Data?, name: String) -> String? {
+            guard let data else { return nil }
+            let path = "\(mixDir)/\(name)"
+            let url = localFileManager.fileURL(for: path)
+            do { try data.write(to: url); return path } catch { return nil }
+        }
+
+        func makeThumbnailData(_ image: UIImage?) -> Data? {
+            guard let image else { return nil }
+            let targetWidth: CGFloat = 300
+            let scale = targetWidth / image.size.width
+            let targetSize = CGSize(width: targetWidth, height: image.size.height * scale)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1.0
+            let resized = UIGraphicsImageRenderer(size: targetSize, format: format).image { _ in
+                image.draw(in: CGRect(origin: .zero, size: targetSize))
+            }
+            return resized.jpegData(compressionQuality: 0.5)
+        }
+
+        // Ensure video thumbnail is ready (generateVideoThumbnail runs in a fire-and-forget Task)
+        if mixType == .video, videoThumbnail == nil, let data = videoData {
+            await ensureVideoThumbnail(from: data)
+        } else if mixType == .import, videoThumbnail == nil, importThumbnail == nil, let data = importMediaData {
+            await ensureVideoThumbnail(from: data)
+        }
+
+        // Build in-memory media blob — large files are NOT written to disk here.
+        // MixCreationService writes them to disk in the background.
+        var media = MixCreationMedia()
+
+        switch mixType {
+        case .text:
+            break
+        case .photo:
+            media.photoData = photoData
+            let thumbData = makeThumbnailData(photoThumbnail)
+            media.photoThumbnailData = thumbData
+            request.rawPhotoThumbnailPath = writeSmall(thumbData, name: "photo_thumb.jpg")
+        case .video:
+            media.videoData = videoData
+            let thumbData = makeThumbnailData(videoThumbnail)
+            media.videoThumbnailData = thumbData
+            request.rawVideoThumbnailPath = writeSmall(thumbData, name: "video_thumb.jpg")
+        case .import:
+            media.importMediaData = importMediaData
+            media.importAudioData = importAudioData
+            let thumbData = makeThumbnailData(importThumbnail ?? videoThumbnail)
+            media.importThumbnailData = thumbData
+            request.rawImportThumbnailPath = writeSmall(thumbData, name: "import_thumb.jpg")
+        case .embed:
+            media.embedOgImageData = embedOgImageData
+            request.rawEmbedOgImagePath = writeSmall(embedOgImageData, name: "embed_og.jpg")
+        case .audio:
+            media.audioData = audioData
+        }
+
+        // Capture screenshot locally (pure ImageRenderer, no network)
+        // Audio-only imports (no video) render as .audio type for the screenshot
+        let isAudioOnlyImport = mixType == .import && importMediaData == nil
+        let screenshotMixType = isAudioOnlyImport ? MixType.audio : mixType
+
+        let thumbnail: UIImage? = switch mixType {
+        case .photo: photoThumbnail
+        case .video: videoThumbnail
+        case .import: importThumbnail ?? videoThumbnail
+        default: nil
+        }
+        let embedImg: UIImage? = if let data = embedOgImageData { UIImage(data: data) } else { nil }
+
+        let gradients: (top: String, bottom: String)?
+        if let thumb = thumbnail {
+            gradients = ScreenshotService.extractGradients(from: thumb)
+        } else {
+            gradients = nil
+        }
+        request.gradientTop = gradients?.top
+        request.gradientBottom = gradients?.bottom
+
+        if let screenshot = ScreenshotService.capture(
+            mixType: screenshotMixType,
+            textContent: textContent,
+            mediaThumbnail: thumbnail,
+            embedUrl: hasEmbed ? embedUrl : nil,
+            embedOg: embedOg,
+            embedImage: embedImg,
+            gradientTop: gradients?.top,
+            gradientBottom: gradients?.bottom
+        ), let jpegData = screenshot.jpegData(compressionQuality: 0.7) {
+            request.screenshotPath = writeSmall(jpegData, name: "screenshot.jpg")
+
+            request.previewScaleY = ScreenshotService.computeScaleY(
+                mixType: screenshotMixType,
+                textContent: textContent,
+                mediaThumbnail: thumbnail,
+                importHasVideo: importMediaData != nil,
+                embedImage: embedImg,
+                embedUrl: hasEmbed ? embedUrl : nil,
+                embedOg: embedOg
+            )
+        }
+
+        // Enqueue to MixCreationService (creates LocalMix, spawns background Task)
+        let creationService: MixCreationService = resolve()
+        creationService.enqueue(request: request, media: media, modelContext: modelContext)
+
+        return true
     }
 
     private func performUpdate() async -> Bool {
@@ -1131,18 +1054,14 @@ final class CreateMixViewModel {
                 // Content generation failed — continue saving without content
             }
 
-            // Generate embedding from content (non-fatal)
-            if let contentText = payload.content, !contentText.isEmpty {
-                do {
-                    let embedding = try await EmbeddingService.generate(from: contentText)
-                    payload.contentEmbedding = PgVector(values: embedding)
-                } catch {
-                    // Embedding generation failed — continue saving without embedding
-                }
-            }
+            // Local embedding is generated during sync (SyncEngine)
+            // No need to send embedding to Supabase — search is fully on-device
 
             // Capture screenshot (non-fatal)
             do {
+                let isAudioOnlyImportUpdate = mixType == .import && importMediaData == nil
+                let screenshotMixTypeUpdate = isAudioOnlyImportUpdate ? MixType.audio : mixType
+
                 let thumbnail: UIImage? = switch mixType {
                 case .photo: photoThumbnail
                 case .video: videoThumbnail
@@ -1151,19 +1070,34 @@ final class CreateMixViewModel {
                 }
                 let embedImg: UIImage? = if let data = embedOgImageData { UIImage(data: data) } else { nil }
 
+                // Extract gradient colors from source image before capturing screenshot
+                let gradients: (top: String, bottom: String)?
+                if let thumb = thumbnail {
+                    gradients = ScreenshotService.extractGradients(from: thumb)
+                } else {
+                    gradients = nil
+                }
+
+                if let gradients {
+                    payload.gradientTop = gradients.top
+                    payload.gradientBottom = gradients.bottom
+                }
+
                 if let screenshot = ScreenshotService.capture(
-                    mixType: mixType,
+                    mixType: screenshotMixTypeUpdate,
                     textContent: textContent,
                     mediaThumbnail: thumbnail,
                     embedUrl: hasEmbed ? embedUrl : nil,
                     embedOg: embedOg,
-                    embedImage: embedImg
+                    embedImage: embedImg,
+                    gradientTop: gradients?.top,
+                    gradientBottom: gradients?.bottom
                 ), let jpegData = screenshot.jpegData(compressionQuality: 0.7) {
                     let screenshotUrl = try await repo.uploadMedia(data: jpegData, fileName: "screenshot.jpg", contentType: "image/jpeg")
                     payload.screenshotUrl = screenshotUrl
 
                     let scaleY = ScreenshotService.computeScaleY(
-                        mixType: mixType,
+                        mixType: screenshotMixTypeUpdate,
                         textContent: textContent,
                         mediaThumbnail: thumbnail,
                         importHasVideo: importMediaData != nil,

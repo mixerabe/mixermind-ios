@@ -19,6 +19,7 @@ struct Mix: Codable, Identifiable, Hashable {
     let createdAt: Date
     let title: String?
     var tags: [Tag] = []
+    var creationStatus: String? = nil  // Local-only display property (not in CodingKeys)
 
     // Text
     let textContent: String?
@@ -44,6 +45,9 @@ struct Mix: Codable, Identifiable, Hashable {
 
     // Audio
     let audioUrl: String?
+
+    // Search content (AI-generated description / transcript)
+    let content: String?
 
     // Screenshot preview
     let screenshotUrl: String?
@@ -72,6 +76,7 @@ struct Mix: Codable, Identifiable, Hashable {
         embedUrl: String? = nil,
         embedOg: OGMetadata? = nil,
         audioUrl: String? = nil,
+        content: String? = nil,
         screenshotUrl: String? = nil,
         previewScaleY: Double? = nil,
         gradientTop: String? = nil,
@@ -95,6 +100,7 @@ struct Mix: Codable, Identifiable, Hashable {
         self.embedUrl = embedUrl
         self.embedOg = embedOg
         self.audioUrl = audioUrl
+        self.content = content
         self.screenshotUrl = screenshotUrl
         self.previewScaleY = previewScaleY
         self.gradientTop = gradientTop
@@ -102,7 +108,7 @@ struct Mix: Codable, Identifiable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, title // tags excluded — populated locally
+        case id, type, title, content // tags excluded — populated locally
         case createdAt = "created_at"
         case textContent = "text_content"
         case ttsAudioUrl = "tts_audio_url"

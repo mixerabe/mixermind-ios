@@ -32,8 +32,10 @@ final class SyncEngine {
             let remoteIds = Set(remoteMixes.map(\.id))
             let localIds = Set(localMixes.map(\.mixId))
 
-            // 3. Delete removed mixes
-            let deletedIds = localIds.subtracting(remoteIds)
+            // 3. Delete removed mixes (skip mixes being created locally)
+            let deletedIds = localIds.subtracting(remoteIds).filter { id in
+                localMap[id]?.creationStatus == nil
+            }
             for id in deletedIds {
                 if let local = localMap[id] {
                     deleteLocalFiles(for: local)
@@ -66,9 +68,14 @@ final class SyncEngine {
                 syncStatus = .downloading(current: completed, total: totalDownloads)
             }
 
-            // 7. Update existing mixes
+            // 7. Update existing mixes (skip in-progress creations)
             for mix in existingMixes {
                 if let local = localMap[mix.id] {
+                    guard local.creationStatus == nil else {
+                        completed += 1
+                        syncStatus = .downloading(current: completed, total: totalDownloads)
+                        continue
+                    }
                     local.updateFromRemote(mix)
                     await downloadAllMedia(for: local, from: mix)
                     completed += 1
@@ -79,7 +86,10 @@ final class SyncEngine {
             // 8. Sync tags and mix_tags
             await syncTags(modelContext: modelContext)
 
-            // 9. Save
+            // 9. Generate local embeddings for mixes that have content but no embedding
+            await generateMissingEmbeddings(modelContext: modelContext)
+
+            // 10. Save
             try modelContext.save()
             syncStatus = .completed
         } catch {
@@ -236,16 +246,44 @@ final class SyncEngine {
                 }
             }
 
-            // Sync mix_tags: replace all with remote state
+            // Sync mix_tags: replace with remote state, but keep rows for creating mixes
+            let creatingMixIds = Set(
+                ((try? modelContext.fetch(FetchDescriptor<LocalMix>())) ?? [])
+                    .filter { $0.creationStatus != nil }
+                    .map(\.mixId)
+            )
             let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
             for local in localMixTags {
-                modelContext.delete(local)
+                if !creatingMixIds.contains(local.mixId) {
+                    modelContext.delete(local)
+                }
             }
             for row in remoteMixTags {
                 modelContext.insert(LocalMixTag(mixId: row.mixId, tagId: row.tagId))
             }
         } catch {
             // Tag sync failed — local state preserved, will retry next sync
+        }
+    }
+
+    // MARK: - Local Embeddings
+
+    private func generateMissingEmbeddings(modelContext: ModelContext) async {
+        let descriptor = FetchDescriptor<LocalMix>()
+        guard let localMixes = try? modelContext.fetch(descriptor) else { return }
+
+        for local in localMixes {
+            // Skip if already embedded or no content to embed
+            guard local.localEmbedding == nil,
+                  let content = local.searchContent,
+                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { continue }
+
+            do {
+                local.localEmbedding = try await EmbeddingService.generate(from: content)
+            } catch {
+                // Embedding failed — will retry next sync
+            }
         }
     }
 

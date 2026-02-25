@@ -48,6 +48,11 @@ struct MixerMindApp: App {
             ContentView()
                 .preferredColorScheme(.dark)
                 .modelContainer(modelContainer)
+                .task {
+                    let service: MixCreationService = resolve()
+                    let context = modelContainer.mainContext
+                    service.resumeIncomplete(modelContext: context)
+                }
         }
     }
 }

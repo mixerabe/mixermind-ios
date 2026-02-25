@@ -1,45 +1,62 @@
 import Foundation
+import NaturalLanguage
 
 enum EmbeddingService {
 
-    static func generate(from text: String) async throws -> [Double] {
+    /// Generate a local embedding from text using Apple's NLContextualEmbedding.
+    /// Returns a [Float] vector (512 dimensions) encoded as Data for storage.
+    static func generate(from text: String) async throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw EmbeddingError.emptyInput }
 
-        guard let endpoint = URL(string: "\(Constants.backendURL)/api/embeddings") else {
-            throw EmbeddingError.invalidResponse
-        }
+        // NLContextualEmbedding is synchronous and CPU-bound — run off main
+        return try await Task.detached {
+            guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else {
+                throw EmbeddingError.modelUnavailable
+            }
 
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
+            guard let vector = embedding.vector(for: trimmed) else {
+                throw EmbeddingError.embeddingFailed
+            }
 
-        let body = ["text": trimmed]
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw EmbeddingError.invalidResponse
-        }
-
-        let result = try JSONDecoder().decode(EmbeddingResponse.self, from: data)
-        return result.embedding
+            // Encode [Double] -> Data for compact storage
+            return vector.withUnsafeBufferPointer { buffer in
+                Data(buffer: buffer)
+            }
+        }.value
     }
 
-    private struct EmbeddingResponse: Decodable {
-        let embedding: [Double]
+    /// Decode stored embedding Data back to [Double].
+    static func decode(_ data: Data) -> [Double] {
+        data.withUnsafeBytes { raw in
+            Array(raw.bindMemory(to: Double.self))
+        }
+    }
+
+    /// Cosine similarity between two vectors.
+    static func cosineSimilarity(_ a: [Double], _ b: [Double]) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        var dot = 0.0, normA = 0.0, normB = 0.0
+        for i in a.indices {
+            dot += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
+        }
+        let denom = sqrt(normA) * sqrt(normB)
+        guard denom > 0 else { return 0 }
+        return dot / denom
     }
 
     enum EmbeddingError: LocalizedError {
         case emptyInput
-        case invalidResponse
+        case modelUnavailable
+        case embeddingFailed
 
         var errorDescription: String? {
             switch self {
             case .emptyInput: return "No text to embed"
-            case .invalidResponse: return "Failed to generate embedding"
+            case .modelUnavailable: return "Sentence embedding model not available"
+            case .embeddingFailed: return "Failed to generate embedding"
             }
         }
     }

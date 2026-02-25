@@ -223,7 +223,7 @@ struct MixCanvasView: View {
                 .animation(.easeInOut(duration: 0.15), value: isScrubbing)
             }
         }
-        .frame(height: 18)
+        .frame(height: 44)
         .contentShape(.rect)
         .gesture(scrubGesture)
     }
