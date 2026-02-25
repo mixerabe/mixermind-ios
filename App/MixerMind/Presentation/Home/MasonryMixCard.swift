@@ -4,7 +4,7 @@ struct MasonryMixCard: View {
     let mix: Mix
 
     private static let darkBg = Color(red: 0.08, green: 0.08, blue: 0.08)
-    private static let canvasAspect: CGFloat = 9.0 / 16.0 // width / height
+    private static let canvasAspect: CGFloat = 9.0 / 17.0 // width / height
 
     /// Parse title around "--", "—" (em dash), or "–" (en dash) delimiter
     private var parsedTitle: (title: String, subtitle: String?)? {
@@ -34,7 +34,7 @@ struct MasonryMixCard: View {
                 GeometryReader { geo in
                     let cardW = geo.size.width
                     let cardH = cardW / croppedAspectRatio
-                    // Full-width image at original 9:16 proportions, clipped vertically from center
+                    // Full-width image at original 9:17 proportions, clipped vertically from center
                     let imgH = cardW / Self.canvasAspect
 
                     LocalAsyncImage(url: screenshotURL) { image in
