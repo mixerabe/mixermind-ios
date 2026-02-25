@@ -9,6 +9,7 @@ final class MixViewerViewModel {
     private(set) var activeID: UUID?
 
     var isScrubbing = false
+    private var wasPlayingBeforeScrub = false
     var tagsForCurrentMix: [Tag] = []
     var allTags: [Tag] = []
     var isAutoScroll = false
@@ -157,6 +158,7 @@ final class MixViewerViewModel {
     }
 
     func beginScrub() {
+        wasPlayingBeforeScrub = coordinator.isPlaying
         isScrubbing = true
         coordinator.pause()
         videoPlayer?.pause()
@@ -183,8 +185,10 @@ final class MixViewerViewModel {
 
     func endScrub() {
         isScrubbing = false
-        coordinator.resume()
-        videoPlayer?.play()
+        if wasPlayingBeforeScrub {
+            coordinator.resume()
+            videoPlayer?.play()
+        }
     }
 
     // MARK: - Coordinator Sync
@@ -381,8 +385,9 @@ final class MixViewerViewModel {
                 embedOg: mixes[index].embedOg,
                 audioUrl: mixes[index].audioUrl,
                 screenshotUrl: mixes[index].screenshotUrl,
-                previewScaleX: mixes[index].previewScaleX,
-                previewScaleY: mixes[index].previewScaleY
+                previewScaleY: mixes[index].previewScaleY,
+                gradientTop: mixes[index].gradientTop,
+                gradientBottom: mixes[index].gradientBottom
             )
         }
 

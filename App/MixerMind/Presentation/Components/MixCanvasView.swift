@@ -11,6 +11,11 @@ struct MixCanvasView: View {
     let videoPlayer: AVPlayer?
     let embedUrl: String?
     let embedOg: OGMetadata?
+
+    // Gradient background
+    var gradientTop: String?
+    var gradientBottom: String?
+
     let onEmbedTap: (() -> Void)?
 
     // Playback state
@@ -39,9 +44,20 @@ struct MixCanvasView: View {
 
     private static let darkBg = Color.blue
 
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [
+                Color(hex: gradientTop ?? "#1a1a2e"),
+                Color(hex: gradientBottom ?? "#16213e")
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     var body: some View {
         ZStack {
-            Color.clear
+            backgroundGradient
 
             // Content layer — centered
             contentLayer
@@ -284,5 +300,18 @@ struct MixCanvasView: View {
         let m = total / 60
         let s = total % 60
         return String(format: "%d:%02d", m, s)
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        var rgb: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&rgb)
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
+        )
     }
 }

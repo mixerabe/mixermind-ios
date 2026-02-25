@@ -18,7 +18,7 @@ final class MixRepository {
         import_source_url, import_media_url, import_thumbnail_url, import_audio_url, \
         embed_url, embed_og, \
         audio_url, \
-        screenshot_url, preview_scale_x, preview_scale_y
+        screenshot_url, preview_scale_y
         """
 
     // MARK: - CRUD

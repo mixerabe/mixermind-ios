@@ -38,13 +38,14 @@ struct MixViewerView: View {
         ZStack {
             pagingCanvas
                 .frame(width: canvasSize.width, height: canvasSize.height)
-                .background(Color.red)
+                .background(Color.clear)
                 .allowsHitTesting(!isMinimized)
 
             // Top chrome — positioned below safe area
             topChrome
                 .position(x: canvasSize.width / 2, y: safeAreaTop + 36)
                 .opacity(chromeOpacity)
+                .allowsHitTesting(!isMinimized)
 
             // Mini controls — big buttons that scale down naturally with the viewer
             miniControls
@@ -282,6 +283,8 @@ struct MixViewerView: View {
             videoPlayer: isCurrent ? viewModel.videoPlayer : nil,
             embedUrl: mix.embedUrl,
             embedOg: mix.embedOg,
+            gradientTop: mix.gradientTop,
+            gradientBottom: mix.gradientBottom,
             onEmbedTap: {
                 if let embedUrl = mix.embedUrl, let url = URL(string: embedUrl) {
                     UIApplication.shared.open(url)

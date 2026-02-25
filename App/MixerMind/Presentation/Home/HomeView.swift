@@ -189,7 +189,7 @@ struct HomeView: View {
                 .clipped()
                 .clipShape(.rect(cornerRadius: 16))
                 .scaleEffect(isViewerExpanded ? viewerDragScale : Self.miniTargetScale)
-                .offset(isViewerExpanded ? viewerDragOffset : .zero)
+                .offset(isViewerExpanded ? viewerDragOffset : miniDragOffset)
                 .position(
                     x: isViewerExpanded ? canvasW / 2 : miniTargetPosition.x,
                     y: isViewerExpanded ? canvasH / 2 : miniTargetPosition.y
@@ -202,8 +202,7 @@ struct HomeView: View {
                             .gesture(viewerDragGesture)
                     }
                 }
-                .gesture(!isViewerExpanded ? miniCornerDragGesture : nil)
-                .onTapGesture { if !isViewerExpanded { expandFromMini() } }
+                .allowsHitTesting(true)
                 .ignoresSafeArea()
                 .transition(.asymmetric(
                     insertion: isExpandingFromMini ? .identity : .move(edge: .trailing),
@@ -212,6 +211,20 @@ struct HomeView: View {
                 .animation(.spring(duration: 0.35), value: isViewerExpanded)
                 .animation(.spring(duration: 0.35), value: vm.currentMix.id)
                 .zIndex(10)
+
+                // Mini drag target — inset from top/bottom to leave buttons exposed
+                if !isViewerExpanded {
+                    let inset: CGFloat = 38
+                    Color.clear
+                        .frame(width: Self.miniCardWidth, height: max(currentMiniCardHeight - inset * 2, 20))
+                        .contentShape(.rect)
+                        .offset(miniDragOffset)
+                        .position(x: miniTargetPosition.x, y: miniTargetPosition.y)
+                        .gesture(miniCornerDragGesture)
+                        .onTapGesture { expandFromMini() }
+                        .ignoresSafeArea()
+                        .zIndex(12)
+                }
 
                 // Tag bar — independent floating layer above bottom safe area
                 if isViewerExpanded && viewerDragProgress == 0 {
@@ -253,6 +266,9 @@ struct HomeView: View {
         let screen = UIScreen.main.bounds
         let padding: CGFloat = 16
         let bottomBarClearance: CGFloat = 100
+        let safeTop = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.top ?? 0
         let cardW = Self.miniCardWidth
         let cardH = currentMiniCardHeight
 
@@ -268,25 +284,33 @@ struct HomeView: View {
             targetY = screen.height - padding - bottomBarClearance - cardH / 2
         case .topTrailing:
             targetX = screen.width - padding - cardW / 2
-            targetY = padding + cardH / 2
+            targetY = safeTop - 8 + cardH / 2
         case .topLeading:
             targetX = padding + cardW / 2
-            targetY = padding + cardH / 2
+            targetY = safeTop - 8 + cardH / 2
         }
 
-        return CGPoint(
-            x: targetX + miniDragOffset.width,
-            y: targetY + miniDragOffset.height
-        )
+        return CGPoint(x: targetX, y: targetY)
     }
 
-    /// Corner-drag gesture for repositioning the mini viewer.
+    /// Drag gesture for the mini viewer — snap to closest corner on release.
     private var miniCornerDragGesture: some Gesture {
         DragGesture()
-            .onChanged { miniDragOffset = $0.translation }
+            .onChanged { value in
+                miniDragOffset = value.translation
+            }
             .onEnded { value in
-                let isRight = value.predictedEndTranslation.width > 0
-                let isDown = value.predictedEndTranslation.height > 0
+                // Where the card center ends up
+                let landing = CGPoint(
+                    x: miniTargetPosition.x + value.predictedEndTranslation.width,
+                    y: miniTargetPosition.y + value.predictedEndTranslation.height
+                )
+                // Snap to closest corner
+                let screen = UIScreen.main.bounds
+                let midX = screen.width / 2
+                let midY = screen.height / 2
+                let isRight = landing.x > midX
+                let isDown = landing.y > midY
                 withAnimation(.spring(duration: 0.3)) {
                     switch (isRight, isDown) {
                     case (true, true): miniPlayerCorner = .bottomTrailing

@@ -47,8 +47,11 @@ struct Mix: Codable, Identifiable, Hashable {
 
     // Screenshot preview
     let screenshotUrl: String?
-    let previewScaleX: Double?
     let previewScaleY: Double?
+
+    // Gradient background
+    let gradientTop: String?
+    let gradientBottom: String?
 
     init(
         id: UUID,
@@ -70,8 +73,9 @@ struct Mix: Codable, Identifiable, Hashable {
         embedOg: OGMetadata? = nil,
         audioUrl: String? = nil,
         screenshotUrl: String? = nil,
-        previewScaleX: Double? = nil,
-        previewScaleY: Double? = nil
+        previewScaleY: Double? = nil,
+        gradientTop: String? = nil,
+        gradientBottom: String? = nil
     ) {
         self.id = id
         self.type = type
@@ -92,8 +96,9 @@ struct Mix: Codable, Identifiable, Hashable {
         self.embedOg = embedOg
         self.audioUrl = audioUrl
         self.screenshotUrl = screenshotUrl
-        self.previewScaleX = previewScaleX
         self.previewScaleY = previewScaleY
+        self.gradientTop = gradientTop
+        self.gradientBottom = gradientBottom
     }
 
     enum CodingKeys: String, CodingKey {
@@ -113,8 +118,9 @@ struct Mix: Codable, Identifiable, Hashable {
         case embedOg = "embed_og"
         case audioUrl = "audio_url"
         case screenshotUrl = "screenshot_url"
-        case previewScaleX = "preview_scale_x"
         case previewScaleY = "preview_scale_y"
+        case gradientTop = "gradient_top"
+        case gradientBottom = "gradient_bottom"
     }
 }
 
@@ -162,8 +168,9 @@ struct CreateMixPayload: Encodable {
     var embedOg: OGMetadata? = nil
     var audioUrl: String? = nil
     var screenshotUrl: String? = nil
-    var previewScaleX: Double? = nil
     var previewScaleY: Double? = nil
+    var gradientTop: String? = nil
+    var gradientBottom: String? = nil
     var content: String? = nil
     var contentEmbedding: PgVector? = nil
 
@@ -183,8 +190,9 @@ struct CreateMixPayload: Encodable {
         case embedOg = "embed_og"
         case audioUrl = "audio_url"
         case screenshotUrl = "screenshot_url"
-        case previewScaleX = "preview_scale_x"
         case previewScaleY = "preview_scale_y"
+        case gradientTop = "gradient_top"
+        case gradientBottom = "gradient_bottom"
         case contentEmbedding = "content_embedding"
     }
 }
@@ -205,8 +213,9 @@ struct UpdateMixPayload: Encodable {
     var embedOg: OGMetadata? = nil
     var audioUrl: String? = nil
     var screenshotUrl: String? = nil
-    var previewScaleX: Double? = nil
     var previewScaleY: Double? = nil
+    var gradientTop: String? = nil
+    var gradientBottom: String? = nil
     var content: String? = nil
     var contentEmbedding: PgVector? = nil
 
@@ -226,8 +235,9 @@ struct UpdateMixPayload: Encodable {
         case embedOg = "embed_og"
         case audioUrl = "audio_url"
         case screenshotUrl = "screenshot_url"
-        case previewScaleX = "preview_scale_x"
         case previewScaleY = "preview_scale_y"
+        case gradientTop = "gradient_top"
+        case gradientBottom = "gradient_bottom"
         case contentEmbedding = "content_embedding"
     }
 }
