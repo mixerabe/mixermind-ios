@@ -32,13 +32,16 @@ struct MixCanvasView: View {
     // Placeholder tap (create mode empty text)
     let onPlaceholderTap: (() -> Void)?
 
+    var isMinimized: Bool = false
+    var dragProgress: CGFloat = 0
+
     @State private var scrubStartProgress: Double = 0
 
-    private static let darkBg = Color(red: 0.08, green: 0.08, blue: 0.08)
+    private static let darkBg = Color.blue
 
     var body: some View {
         ZStack {
-            Self.darkBg
+            Color.clear
 
             // Content layer — centered
             contentLayer
@@ -55,8 +58,9 @@ struct MixCanvasView: View {
             onCanvasTap?()
         }
         .overlay {
-            if isPaused, hasPlayback {
+            if isPaused, hasPlayback, !isMinimized {
                 pausedOverlay
+                    .opacity(Double(max(1 - dragProgress * 3, 0)))
             }
         }
         // Progress bar on top of everything so scrubbing works even when paused

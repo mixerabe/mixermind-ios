@@ -35,6 +35,7 @@ struct TagBarView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
                 .background(isSelected ? Color.white : Color.clear, in: .capsule)
+                .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(in: .capsule)

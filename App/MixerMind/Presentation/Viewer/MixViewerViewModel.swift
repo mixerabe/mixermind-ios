@@ -379,7 +379,10 @@ final class MixViewerViewModel {
                 importAudioUrl: mixes[index].importAudioUrl,
                 embedUrl: mixes[index].embedUrl,
                 embedOg: mixes[index].embedOg,
-                audioUrl: mixes[index].audioUrl
+                audioUrl: mixes[index].audioUrl,
+                screenshotUrl: mixes[index].screenshotUrl,
+                previewScaleX: mixes[index].previewScaleX,
+                previewScaleY: mixes[index].previewScaleY
             )
         }
 
@@ -402,7 +405,7 @@ final class MixViewerViewModel {
                     local.localTtsAudioPath, local.localPhotoPath, local.localPhotoThumbnailPath,
                     local.localVideoPath, local.localVideoThumbnailPath, local.localImportMediaPath,
                     local.localImportThumbnailPath, local.localImportAudioPath, local.localEmbedOgImagePath,
-                    local.localAudioPath,
+                    local.localAudioPath, local.localScreenshotPath,
                 ]
                 for path in paths {
                     if let path { fileManager.deleteFile(at: path) }

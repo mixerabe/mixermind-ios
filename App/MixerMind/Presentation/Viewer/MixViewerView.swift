@@ -7,6 +7,10 @@ struct MixViewerView: View {
     var onMinimize: () -> Void
     var onDismiss: () -> Void
     var onDeleted: ((UUID) -> Void)?
+    var dragProgress: CGFloat = 0 // 0 = fullscreen, 1 = fully minimized
+    var isMinimized: Bool = false
+    var safeAreaTop: CGFloat = 0
+    var miniVisibleHeight: CGFloat = 0
 
     @Environment(\.modelContext) private var modelContext
 
@@ -18,30 +22,34 @@ struct MixViewerView: View {
     @State private var titleDraft = ""
     @State private var isEditingTitle = false
 
-    // Tag editing
-    @State private var showNewTagSheet = false
+
+    private var chromeOpacity: Double {
+        max(1 - dragProgress * 3, 0) // Fades out quickly in first third of drag
+    }
+
+    /// Canvas dimensions: full width, 16:9 aspect
+    private var canvasSize: CGSize {
+        let w = UIScreen.main.bounds.width
+        let h = w * (17.0 / 9.0)
+        return CGSize(width: w, height: h)
+    }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                pagingCanvas
-                viewerBottomBar
-            }
-            .ignoresSafeArea(.keyboard)
-            .background(Color(red: 0.08, green: 0.08, blue: 0.08))
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .tint(.white)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { onMinimize() } label: {
-                        Image(systemName: "chevron.down")
-                            .fontWeight(.semibold)
-                    }
-                }
-                viewerToolbarItems
-            }
+        ZStack {
+            pagingCanvas
+                .frame(width: canvasSize.width, height: canvasSize.height)
+                .background(Color.red)
+                .allowsHitTesting(!isMinimized)
+
+            // Top chrome — positioned below safe area
+            topChrome
+                .position(x: canvasSize.width / 2, y: safeAreaTop + 36)
+                .opacity(chromeOpacity)
+
+            // Mini controls — big buttons that scale down naturally with the viewer
+            miniControls
+                .opacity(isMinimized ? 1 : 0)
+                .allowsHitTesting(isMinimized)
         }
         .sheet(isPresented: $isEditingTitle) {
             TitleEditSheet(
@@ -94,17 +102,17 @@ struct MixViewerView: View {
     private var pagingCanvas: some View {
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
-                ForEach(Array(viewModel.mixes.enumerated()), id: \.element.id) { index, mix in
+                ForEach(viewModel.mixes) { mix in
                     canvasForMix(mix)
-                        .containerRelativeFrame([.horizontal, .vertical])
+                        .frame(width: canvasSize.width, height: canvasSize.height)
                 }
             }
             .scrollTargetLayout()
         }
         .scrollTargetBehavior(.paging)
+        .scrollDisabled(isMinimized)
         .scrollIndicators(.hidden)
         .scrollPosition(id: $viewModel.scrolledID, anchor: .top)
-        .ignoresSafeArea(edges: .top)
         .ignoresSafeArea(.keyboard)
         .onScrollPhaseChange { _, newPhase in
             if newPhase == .idle {
@@ -113,61 +121,82 @@ struct MixViewerView: View {
         }
     }
 
-    // MARK: - Viewer Bottom Bar
 
-    private var viewerBottomBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(viewModel.sortedTags) { tag in
-                    let isOn = viewModel.tagsForCurrentMix.contains { $0.id == tag.id }
-                    Button {
-                        viewModel.toggleTag(tag)
-                    } label: {
-                        Text("#\(tag.name)")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(isOn ? .black : .white)
-                            .padding(.horizontal, 14)
-                            .frame(height: 44)
-                            .background(isOn ? Color.white : Color.clear, in: .capsule)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(in: .capsule)
-                }
+    // MARK: - Mini Controls (inside viewer, scale down naturally)
 
-                // New tag button
-                Button {
-                    showNewTagSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .frame(height: 44)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(in: .capsule)
-                .sheet(isPresented: $showNewTagSheet) {
-                    NewTagSheet { name in
-                        viewModel.createAndAddTag(name: name)
-                    }
-                    .presentationDetents([.height(140)])
-                    .presentationDragIndicator(.hidden)
-                }
-            }
-            .padding(.horizontal)
-        }
-        .padding(.vertical, 8)
+    /// The height in canvas coordinates that will be visible after clip.
+    private var miniVisibleCanvasHeight: CGFloat {
+        guard miniVisibleHeight > 0 else { return canvasSize.height }
+        let scale = Self.miniTargetScale
+        guard scale > 0 else { return canvasSize.height }
+        return miniVisibleHeight / scale
     }
 
-    // MARK: - Viewer Toolbar
+    private static var miniTargetScale: CGFloat {
+        let screen = UIScreen.main.bounds
+        guard screen.width > 0 else { return 0.3 }
+        return 136.0 / screen.width
+    }
 
-    @ToolbarContentBuilder
-    private var viewerToolbarItems: some ToolbarContent {
-        if !viewModel.mixes.isEmpty {
-            ToolbarItem(placement: .principal) {
-                titleBar
+    private var miniControls: some View {
+        ZStack {
+            // Dismiss — top trailing
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { onDismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 70, height: 70)
+                            .background(.ultraThinMaterial, in: .circle)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(16)
+                Spacer()
             }
-            ToolbarItem(placement: .primaryAction) {
+
+            // Playback controls — at the bottom of the visible clip area
+            VStack {
+                Spacer()
+                HStack(spacing: 48) {
+                    Button { coordinator.previous() } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 22))
+                            .frame(width: 70, height: 70)
+                            .contentShape(Rectangle())
+                    }
+
+                    Button { coordinator.togglePlayPause() } label: {
+                        Image(systemName: coordinator.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 28))
+                            .frame(width: 80, height: 80)
+                            .contentShape(Rectangle())
+                    }
+
+                    Button { coordinator.next() } label: {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 22))
+                            .frame(width: 70, height: 70)
+                            .contentShape(Rectangle())
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .padding(.bottom, miniVisibleCanvasHeight * 0.05)
+            }
+        }
+        .frame(width: canvasSize.width, height: miniVisibleCanvasHeight)
+    }
+
+    // MARK: - Top Chrome (replaces toolbar)
+
+    private var topChrome: some View {
+        HStack {
+            // Left: menu
+            if !viewModel.mixes.isEmpty {
                 Menu {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -184,11 +213,41 @@ struct MixViewerView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .fontWeight(.semibold)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .glassEffect(in: .circle)
+            } else {
+                Color.clear.frame(width: 44, height: 44)
             }
+
+            Spacer()
+
+            // Center: title chip
+            if !viewModel.mixes.isEmpty {
+                titleBar
+            }
+
+            Spacer()
+
+            // Right: minimize button
+            Button { onMinimize() } label: {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(in: .circle)
         }
+        .padding(.horizontal, 16)
+        .frame(width: canvasSize.width)
     }
+
 
     // MARK: - Canvas per Mix
 
@@ -264,7 +323,9 @@ struct MixViewerView: View {
                     }
                 }
             },
-            onPlaceholderTap: nil
+            onPlaceholderTap: nil,
+            isMinimized: isMinimized,
+            dragProgress: dragProgress
         )
     }
 
@@ -278,10 +339,11 @@ struct MixViewerView: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(viewModel.currentMix.title != nil ? .white : .white.opacity(0.4))
                 .lineLimit(1)
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+                .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 16)
-        .frame(height: 44)
         .glassEffect(in: .capsule)
     }
 
@@ -309,39 +371,91 @@ private struct TitleEditSheet: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            VStack {
-                TextField("Title", text: $title)
-                    .focused($isFocused)
-                    .textFieldStyle(.plain)
-                    .font(.body)
-                    .padding()
-                    .glassEffect(in: .rect(cornerRadius: 12))
-                    .submitLabel(.done)
-                    .onSubmit { onDone() }
-                    .onChange(of: title) { _, newValue in
-                        if newValue.count > 50 {
-                            title = String(newValue.prefix(50))
-                        }
-                    }
-
+        VStack(spacing: 0) {
+            // Header with Cancel / Title / Done
+            HStack {
+                Button("Cancel") { onCancel() }
+                    .foregroundStyle(Color.accentColor)
                 Spacer()
+                Text("Edit Title")
+                    .font(.headline)
+                Spacer()
+                Button("Done") { onDone() }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Color.accentColor)
             }
-            .padding()
-            .navigationTitle("Edit Title")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onCancel() }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+
+            TextField("Title", text: $title)
+                .focused($isFocused)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .padding()
+                .glassEffect(in: .rect(cornerRadius: 12))
+                .submitLabel(.done)
+                .onSubmit { onDone() }
+                .onChange(of: title) { _, newValue in
+                    if newValue.count > 50 {
+                        title = String(newValue.prefix(50))
+                    }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { onDone() }
-                        .fontWeight(.semibold)
-                }
-            }
+                .padding(.horizontal)
+
+            Spacer()
         }
+        .padding(.top, 8)
         .onAppear {
             isFocused = true
+        }
+    }
+}
+
+struct ViewerTagBar: View {
+    @Bindable var viewModel: MixViewerViewModel
+    @State private var showNewTagSheet = false
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(viewModel.sortedTags) { tag in
+                    let isOn = viewModel.tagsForCurrentMix.contains { $0.id == tag.id }
+                    Button {
+                        viewModel.toggleTag(tag)
+                    } label: {
+                        Text("#\(tag.name)")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(isOn ? .black : .white)
+                            .padding(.horizontal, 14)
+                            .frame(height: 44)
+                            .background(isOn ? Color.white : Color.clear, in: .capsule)
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .capsule)
+                }
+
+                Button {
+                    showNewTagSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .frame(height: 44)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(in: .capsule)
+                .sheet(isPresented: $showNewTagSheet) {
+                    NewTagSheet { name in
+                        viewModel.createAndAddTag(name: name)
+                    }
+                    .presentationDetents([.height(140)])
+                    .presentationDragIndicator(.hidden)
+                }
+            }
+            .padding(.horizontal)
         }
     }
 }

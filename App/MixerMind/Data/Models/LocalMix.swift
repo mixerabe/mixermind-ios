@@ -39,6 +39,12 @@ final class LocalMix {
     var localImportAudioPath: String?
     var localEmbedOgImagePath: String?
     var localAudioPath: String?
+    var localScreenshotPath: String?
+
+    // Screenshot preview
+    var remoteScreenshotUrl: String?
+    var previewScaleX: Double?
+    var previewScaleY: Double?
 
     var isSynced: Bool = false
 
@@ -68,6 +74,9 @@ final class LocalMix {
         remoteEmbedUrl = mix.embedUrl
         remoteAudioUrl = mix.audioUrl
         importSourceUrl = mix.importSourceUrl
+        remoteScreenshotUrl = mix.screenshotUrl
+        previewScaleX = mix.previewScaleX
+        previewScaleY = mix.previewScaleY
 
         if let og = mix.embedOg {
             remoteEmbedOgJson = try? JSONEncoder().encode(og)
@@ -114,7 +123,10 @@ final class LocalMix {
             importAudioUrl: localURL(localImportAudioPath, remote: remoteImportAudioUrl, fileManager: fileManager),
             embedUrl: remoteEmbedUrl,
             embedOg: embedOg,
-            audioUrl: localURL(localAudioPath, remote: remoteAudioUrl, fileManager: fileManager)
+            audioUrl: localURL(localAudioPath, remote: remoteAudioUrl, fileManager: fileManager),
+            screenshotUrl: localURL(localScreenshotPath, remote: remoteScreenshotUrl, fileManager: fileManager),
+            previewScaleX: previewScaleX,
+            previewScaleY: previewScaleY
         )
     }
 

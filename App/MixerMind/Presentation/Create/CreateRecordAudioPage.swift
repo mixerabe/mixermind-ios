@@ -214,6 +214,7 @@ struct CreateRecordAudioPage: View {
                     .fill(.red)
                     .frame(width: 58, height: 58)
             }
+            .contentShape(.circle)
         }
     }
 
@@ -227,6 +228,7 @@ struct CreateRecordAudioPage: View {
                     .font(.title)
                     .foregroundStyle(.white)
             }
+            .contentShape(.circle)
         }
     }
 
@@ -242,6 +244,7 @@ struct CreateRecordAudioPage: View {
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.7))
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -259,6 +262,7 @@ struct CreateRecordAudioPage: View {
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.7))
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -470,6 +470,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MixerMindInfo.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "mixer mind";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "mixermind uses Apple Music to let you add songs to your mixes.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "mixermind needs microphone access to record audio for your mixes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -509,6 +510,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MixerMindInfo.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "mixer mind";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "mixermind uses Apple Music to let you add songs to your mixes.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "mixermind needs microphone access to record audio for your mixes.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

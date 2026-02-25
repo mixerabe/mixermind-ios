@@ -56,6 +56,7 @@ struct ImportURLSheet: View {
                         .foregroundStyle(.primary)
                         .frame(height: 48)
                         .frame(maxWidth: .infinity)
+                        .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(in: .capsule)
@@ -76,6 +77,7 @@ struct ImportURLSheet: View {
                         .foregroundStyle(.primary)
                         .frame(height: 48)
                         .frame(maxWidth: .infinity)
+                        .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(in: .capsule)

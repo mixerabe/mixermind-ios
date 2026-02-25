@@ -131,6 +131,11 @@ final class SyncEngine {
             local.localAudioPath = await download(mix.audioUrl)
         }
 
+        // Download screenshot (universal, all types)
+        if local.localScreenshotPath == nil {
+            local.localScreenshotPath = await download(mix.screenshotUrl)
+        }
+
         // Mark as synced if all applicable media is downloaded
         local.isSynced = checkAllMediaDownloaded(local, mix: mix)
 
@@ -176,23 +181,28 @@ final class SyncEngine {
             return fileManager.fileExists(at: path)
         }
 
+        let screenshotOk = hasLocal(local.localScreenshotPath, remote: mix.screenshotUrl)
+
         switch mix.type {
         case .text:
-            return hasLocal(local.localTtsAudioPath, remote: mix.ttsAudioUrl)
+            return hasLocal(local.localTtsAudioPath, remote: mix.ttsAudioUrl) && screenshotOk
         case .photo:
             return hasLocal(local.localPhotoPath, remote: mix.photoUrl)
                 && hasLocal(local.localPhotoThumbnailPath, remote: mix.photoThumbnailUrl)
+                && screenshotOk
         case .video:
             return hasLocal(local.localVideoPath, remote: mix.videoUrl)
                 && hasLocal(local.localVideoThumbnailPath, remote: mix.videoThumbnailUrl)
+                && screenshotOk
         case .import:
             return hasLocal(local.localImportMediaPath, remote: mix.importMediaUrl)
                 && hasLocal(local.localImportThumbnailPath, remote: mix.importThumbnailUrl)
                 && hasLocal(local.localImportAudioPath, remote: mix.importAudioUrl)
+                && screenshotOk
         case .embed:
-            return hasLocal(local.localEmbedOgImagePath, remote: mix.embedOg?.imageUrl)
+            return hasLocal(local.localEmbedOgImagePath, remote: mix.embedOg?.imageUrl) && screenshotOk
         case .audio:
-            return hasLocal(local.localAudioPath, remote: mix.audioUrl)
+            return hasLocal(local.localAudioPath, remote: mix.audioUrl) && screenshotOk
         }
     }
 
@@ -253,6 +263,7 @@ final class SyncEngine {
             local.localImportAudioPath,
             local.localEmbedOgImagePath,
             local.localAudioPath,
+            local.localScreenshotPath,
         ]
         for path in paths {
             if let path {
@@ -277,13 +288,14 @@ final class SyncEngine {
     }
 
     private func mediaFieldCount(for mix: Mix) -> Int {
+        let screenshot = mix.screenshotUrl != nil ? 1 : 0
         switch mix.type {
-        case .text: return mix.ttsAudioUrl != nil ? 1 : 0
-        case .photo: return [mix.photoUrl, mix.photoThumbnailUrl].compactMap({ $0 }).count
-        case .video: return [mix.videoUrl, mix.videoThumbnailUrl].compactMap({ $0 }).count
-        case .import: return [mix.importMediaUrl, mix.importThumbnailUrl, mix.importAudioUrl].compactMap({ $0 }).count
-        case .embed: return mix.embedOg?.imageUrl != nil ? 1 : 0
-        case .audio: return mix.audioUrl != nil ? 1 : 0
+        case .text: return (mix.ttsAudioUrl != nil ? 1 : 0) + screenshot
+        case .photo: return [mix.photoUrl, mix.photoThumbnailUrl].compactMap({ $0 }).count + screenshot
+        case .video: return [mix.videoUrl, mix.videoThumbnailUrl].compactMap({ $0 }).count + screenshot
+        case .import: return [mix.importMediaUrl, mix.importThumbnailUrl, mix.importAudioUrl].compactMap({ $0 }).count + screenshot
+        case .embed: return (mix.embedOg?.imageUrl != nil ? 1 : 0) + screenshot
+        case .audio: return (mix.audioUrl != nil ? 1 : 0) + screenshot
         }
     }
 }

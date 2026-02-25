@@ -193,6 +193,10 @@ final class HomeViewModel {
         } catch {}
     }
 
+    func removeMix(id: UUID) {
+        mixes.removeAll { $0.id == id }
+    }
+
     func toggleTag(_ tagId: UUID) {
         if selectedTagIds.contains(tagId) {
             selectedTagIds.remove(tagId)

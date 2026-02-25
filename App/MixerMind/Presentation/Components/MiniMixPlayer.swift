@@ -3,20 +3,65 @@ import SwiftUI
 struct MiniMixPlayer: View {
     var viewModel: MixViewerViewModel
     var coordinator: AudioPlaybackCoordinator
-    var animation: Namespace.ID
     var onExpand: () -> Void
     var onDismiss: () -> Void
 
+    @Binding var corner: Corner
+    @State private var dragOffset: CGSize = .zero
+
     private static let darkBg = Color(red: 0.08, green: 0.08, blue: 0.08)
 
+    static let cardWidth: CGFloat = 136
+    static let cardHeight: CGFloat = 172 // thumbnail(120) + controls(34) + progress(8) + padding(16-ish)
+
+    enum Corner {
+        case topLeading, topTrailing, bottomLeading, bottomTrailing
+
+        var alignment: Alignment {
+            switch self {
+            case .topLeading: .topLeading
+            case .topTrailing: .topTrailing
+            case .bottomLeading: .bottomLeading
+            case .bottomTrailing: .bottomTrailing
+            }
+        }
+    }
+
     var body: some View {
+        miniPlayerCard
+            .offset(dragOffset)
+            .gesture(
+                DragGesture()
+                    .onChanged { dragOffset = $0.translation }
+                    .onEnded { value in
+                        let isRight = value.predictedEndTranslation.width > 0
+                        let isDown = value.predictedEndTranslation.height > 0
+                        withAnimation(.spring(duration: 0.3)) {
+                            switch (isRight, isDown) {
+                            case (true, true): corner = .bottomTrailing
+                            case (true, false): corner = .topTrailing
+                            case (false, true): corner = .bottomLeading
+                            case (false, false): corner = .topLeading
+                            }
+                            dragOffset = .zero
+                        }
+                    }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner.alignment)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onChange(of: coordinator.currentTrackIndex) { _, _ in
+                viewModel.syncActiveTrack()
+            }
+    }
+
+    private var miniPlayerCard: some View {
         VStack(spacing: 0) {
-            // Thumbnail area
             thumbnail
                 .frame(width: 120, height: 120)
                 .clipShape(.rect(cornerRadius: 12))
 
-            // Controls
             HStack(spacing: 16) {
                 Button { coordinator.previous() } label: {
                     Image(systemName: "backward.fill")
@@ -45,7 +90,6 @@ struct MiniMixPlayer: View {
             .foregroundStyle(.white)
             .padding(.top, 6)
 
-            // Progress bar
             GeometryReader { geo in
                 Rectangle()
                     .fill(Color.accentColor)
@@ -58,24 +102,20 @@ struct MiniMixPlayer: View {
         .frame(width: 136)
         .background(Self.darkBg, in: .rect(cornerRadius: 16))
         .glassEffect(in: .rect(cornerRadius: 16))
-        .matchedGeometryEffect(id: "viewer", in: animation)
+        .overlay(alignment: .topTrailing) {
+            Button { onDismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.ultraThinMaterial, in: .circle)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .padding(4)
+        }
         .contentShape(Rectangle())
         .onTapGesture { onExpand() }
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onEnded { value in
-                    if value.translation.height > 40 {
-                        onDismiss()
-                    }
-                }
-        )
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .onChange(of: coordinator.currentTrackIndex) { _, _ in
-            viewModel.syncActiveTrack()
-        }
     }
 
     // MARK: - Thumbnail

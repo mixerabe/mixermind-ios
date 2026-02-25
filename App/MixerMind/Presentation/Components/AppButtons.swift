@@ -12,6 +12,7 @@ struct CircleIconButton: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
+                .contentShape(.circle)
         }
         .buttonStyle(.plain)
         .glassEffect(in: .circle)
@@ -59,6 +60,7 @@ struct PillButton: View {
             .frame(height: 48)
             .frame(maxWidth: maxWidth)
             .padding(.horizontal, 16)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(in: .capsule)

@@ -84,19 +84,6 @@ final class CreateMixViewModel {
 
     var isCreating = false
     var errorMessage: String?
-    var isMuted = false
-    var isPaused = false
-    var isScrubbing = false
-
-    // Playback
-    var videoPlayer: AVPlayer?
-    var playbackProgress: Double = 0
-    private var audioPlayer: AVAudioPlayer?
-    private var videoTempURL: URL?
-    private var audioTempURL: URL?
-    private var loopObserver: Any?
-    private var timeObserver: Any?
-    private var progressTimer: Timer?
 
     var selectedPhotoItem: PhotosPickerItem? {
         didSet { loadPhoto() }
@@ -109,9 +96,7 @@ final class CreateMixViewModel {
     private let tagRepo: TagRepository = resolve()
     var modelContext: ModelContext?
 
-    init() {
-        configureAudioSession()
-    }
+    init() {}
 
     init(editing mix: Mix, skipPlayback: Bool = false) {
         self.editingMixId = mix.id
@@ -120,20 +105,9 @@ final class CreateMixViewModel {
         self.embedUrl = mix.embedUrl ?? ""
         self.embedOg = mix.embedOg
 
-        configureAudioSession()
-
         if !skipPlayback {
             loadExistingContent(mix: mix)
         }
-    }
-
-    private func configureAudioSession() {
-        try? AVAudioSession.sharedInstance().setCategory(
-            .playback,
-            mode: .default,
-            options: []
-        )
-        try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     // MARK: - Edit Mode Loaders
@@ -172,7 +146,7 @@ final class CreateMixViewModel {
         Task {
             guard let data = try? await URLSession.shared.data(from: url).0 else { return }
             self.videoData = data
-            self.startVideoPlayback(from: data)
+            self.generateVideoThumbnail(from: data)
         }
     }
 
@@ -208,7 +182,7 @@ final class CreateMixViewModel {
                         }
                         self.mixType = .video
                         self.videoData = data
-                        self.startVideoPlayback(from: data)
+                        self.generateVideoThumbnail(from: data)
                         return
                     }
                 }
@@ -234,74 +208,21 @@ final class CreateMixViewModel {
         return duration.seconds
     }
 
-    // MARK: - Video Playback
+    // MARK: - Video Thumbnail
 
-    private func startVideoPlayback(from data: Data) {
-        stopVideoPlayback()
-        configureAudioSession()
-
+    private func generateVideoThumbnail(from data: Data) {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".mp4")
         do {
             try data.write(to: tempURL)
-        } catch {
-            return
-        }
-        videoTempURL = tempURL
+        } catch { return }
 
-        let player = AVPlayer(url: tempURL)
-        player.volume = 1.0
-        player.isMuted = isMuted
-        videoPlayer = player
-
-        loopObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem,
-            queue: .main
-        ) { [weak player] _ in
-            player?.seek(to: .zero)
-            player?.play()
-        }
-
-        let interval = CMTime(seconds: 0.05, preferredTimescale: 600)
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            Task { @MainActor in
-                guard let self, !self.isScrubbing,
-                      let duration = self.videoPlayer?.currentItem?.duration,
-                      duration.seconds.isFinite, duration.seconds > 0 else { return }
-                self.playbackProgress = time.seconds / duration.seconds
-            }
-        }
-
-        player.play()
-
-        generateVideoThumbnail(from: tempURL)
-    }
-
-    private func stopVideoPlayback() {
-        if let observer = timeObserver, let player = videoPlayer {
-            player.removeTimeObserver(observer)
-            timeObserver = nil
-        }
-        videoPlayer?.pause()
-        videoPlayer = nil
-        playbackProgress = 0
-        if let observer = loopObserver {
-            NotificationCenter.default.removeObserver(observer)
-            loopObserver = nil
-        }
-        if let url = videoTempURL {
-            try? FileManager.default.removeItem(at: url)
-            videoTempURL = nil
-        }
-    }
-
-    private func generateVideoThumbnail(from url: URL) {
-        let asset = AVURLAsset(url: url)
+        let asset = AVURLAsset(url: tempURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         let time = CMTime(seconds: 0, preferredTimescale: 600)
         Task {
+            defer { try? FileManager.default.removeItem(at: tempURL) }
             do {
                 let (cgImage, _) = try await generator.image(at: time)
                 self.videoThumbnail = UIImage(cgImage: cgImage)
@@ -360,71 +281,6 @@ final class CreateMixViewModel {
         isAudioFromTTS = false
     }
 
-    // MARK: - Audio Playback
-
-    private func stopAudioPlayback() {
-        progressTimer?.invalidate()
-        progressTimer = nil
-        audioPlayer?.stop()
-        audioPlayer = nil
-        if videoPlayer == nil { playbackProgress = 0 }
-    }
-
-    // MARK: - Mute
-
-    func toggleMute() {
-        isMuted.toggle()
-        audioPlayer?.volume = isMuted ? 0 : 1
-        videoPlayer?.isMuted = isMuted
-    }
-
-    // MARK: - Pause / Resume
-
-    func togglePause() {
-        isPaused.toggle()
-        if isPaused {
-            videoPlayer?.pause()
-            audioPlayer?.pause()
-        } else {
-            videoPlayer?.play()
-            audioPlayer?.play()
-        }
-    }
-
-    // MARK: - Scrubbing
-
-    private var wasPlayingBeforeScrub = false
-
-    func beginScrub() {
-        isScrubbing = true
-        wasPlayingBeforeScrub = !isPaused
-        videoPlayer?.pause()
-        audioPlayer?.pause()
-    }
-
-    func scrub(to progress: Double) {
-        let clamped = min(max(progress, 0), 1)
-        playbackProgress = clamped
-
-        if let player = videoPlayer,
-           let duration = player.currentItem?.duration,
-           duration.seconds.isFinite, duration.seconds > 0 {
-            let target = CMTime(seconds: clamped * duration.seconds, preferredTimescale: 600)
-            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-        }
-
-        if let audio = audioPlayer, audio.duration > 0 {
-            audio.currentTime = clamped * audio.duration
-        }
-    }
-
-    func endScrub() {
-        isScrubbing = false
-        if wasPlayingBeforeScrub {
-            videoPlayer?.play()
-            audioPlayer?.play()
-        }
-    }
 
     // MARK: - Import from URL
 
@@ -485,7 +341,7 @@ final class CreateMixViewModel {
         self.mixType = .import
         self.importSourceUrl = sourceUrl
         self.importMediaData = videoData
-        self.startVideoPlayback(from: videoData)
+        self.generateVideoThumbnail(from: videoData)
     }
 
     private func importAudio(from result: MediaURLService.Result, sourceUrl: String) async throws {
@@ -710,10 +566,6 @@ final class CreateMixViewModel {
     // MARK: - Clear
 
     func clearAll() {
-        stopVideoPlayback()
-        stopAudioPlayback()
-        isPaused = false
-        playbackProgress = 0
         textContent = ""
         embedUrl = ""
         embedOg = nil
@@ -731,13 +583,6 @@ final class CreateMixViewModel {
         isAudioFromTTS = false
         selectedPhotoItem = nil
         mixType = .text
-    }
-
-    // MARK: - Cleanup
-
-    func stopAllPlayback() {
-        stopVideoPlayback()
-        stopAudioPlayback()
     }
 
     // MARK: - Media Compression
@@ -872,6 +717,49 @@ final class CreateMixViewModel {
         }
     }
 
+    /// Generate a silent AAC audio file of the given duration (for muted videos).
+    private func generateSilence(duration: TimeInterval) throws -> Data {
+        let sampleRate: Double = 44100
+        let channels: AVAudioChannelCount = 1
+        let totalFrames = AVAudioFrameCount(sampleRate * max(duration, 0.1))
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels) else {
+            throw CompressionError.exportFailed
+        }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: totalFrames) else {
+            throw CompressionError.exportFailed
+        }
+        buffer.frameLength = totalFrames
+        // Buffer is zero-initialized = silence
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + "_silence.m4a")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        let file = try AVAudioFile(
+            forWriting: outputURL,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 32_000,
+            ]
+        )
+        try file.write(from: buffer)
+
+        return try Data(contentsOf: outputURL)
+    }
+
+    /// Extract audio from video, or generate silence if the video has no audio track.
+    private func extractOrGenerateSilence(from videoData: Data) async throws -> Data {
+        do {
+            return try await extractAudioFromVideo(data: videoData)
+        } catch {
+            let duration = try await videoDuration(from: videoData)
+            return try generateSilence(duration: duration)
+        }
+    }
+
     // MARK: - Save (Create or Update)
 
     func saveMix() async -> Bool {
@@ -921,25 +809,34 @@ final class CreateMixViewModel {
                 }
 
             case .video:
-                if var data = videoData {
-                    data = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: data, fileName: "video.mp4", contentType: "video/mp4")
+                if let data = videoData {
+                    let compressed = try await compressVideo(data: data)
+                    let url = try await repo.uploadMedia(data: compressed, fileName: "video.mp4", contentType: "video/mp4")
                     payload.videoUrl = url
                     if let thumb = videoThumbnail, let thumbData = thumb.jpegData(compressionQuality: 0.5) {
                         let thumbUrl = try await repo.uploadMedia(data: thumbData, fileName: "video_thumb.jpg", contentType: "image/jpeg")
                         payload.videoThumbnailUrl = thumbUrl
                     }
+                    // Extract audio track (or generate silence for muted videos)
+                    let audioTrackData = try await extractOrGenerateSilence(from: data)
+                    let compressedAudio = try await compressAudio(data: audioTrackData)
+                    let audioUrl = try await repo.uploadMedia(data: compressedAudio, fileName: "video_audio.m4a", contentType: "audio/aac")
+                    payload.audioUrl = audioUrl
                 }
 
             case .import:
                 payload.importSourceUrl = importSourceUrl
-                if var data = importMediaData {
-                    data = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: data, fileName: "import_video.mp4", contentType: "video/mp4")
+                if let data = importMediaData {
+                    let compressed = try await compressVideo(data: data)
+                    let url = try await repo.uploadMedia(data: compressed, fileName: "import_video.mp4", contentType: "video/mp4")
                     payload.importMediaUrl = url
                     if let thumb = videoThumbnail, let thumbData = thumb.jpegData(compressionQuality: 0.5) {
                         let thumbUrl = try await repo.uploadMedia(data: thumbData, fileName: "import_thumb.jpg", contentType: "image/jpeg")
                         payload.importThumbnailUrl = thumbUrl
+                    }
+                    // If no separate audio was provided, extract from the video
+                    if importAudioData == nil {
+                        importAudioData = try await extractOrGenerateSilence(from: data)
                     }
                 }
                 if var data = importAudioData {
@@ -1057,6 +954,42 @@ final class CreateMixViewModel {
                 isGeneratingTitle = false
             }
 
+            // Capture screenshot (non-fatal)
+            do {
+                let thumbnail: UIImage? = switch mixType {
+                case .photo: photoThumbnail
+                case .video: videoThumbnail
+                case .import: importThumbnail ?? videoThumbnail
+                default: nil
+                }
+                let embedImg: UIImage? = if let data = embedOgImageData { UIImage(data: data) } else { nil }
+
+                if let screenshot = ScreenshotService.capture(
+                    mixType: mixType,
+                    textContent: textContent,
+                    mediaThumbnail: thumbnail,
+                    embedUrl: hasEmbed ? embedUrl : nil,
+                    embedOg: embedOg,
+                    embedImage: embedImg
+                ), let jpegData = screenshot.jpegData(compressionQuality: 0.7) {
+                    let screenshotUrl = try await repo.uploadMedia(data: jpegData, fileName: "screenshot.jpg", contentType: "image/jpeg")
+                    payload.screenshotUrl = screenshotUrl
+
+                    let scaleY = ScreenshotService.computeScaleY(
+                        mixType: mixType,
+                        textContent: textContent,
+                        mediaThumbnail: thumbnail,
+                        importHasVideo: importMediaData != nil,
+                        embedImage: embedImg,
+                        embedUrl: hasEmbed ? embedUrl : nil,
+                        embedOg: embedOg
+                    )
+                    payload.previewScaleY = scaleY
+                }
+            } catch {
+                // Screenshot capture/upload failed — continue without it
+            }
+
             let createdMix = try await repo.createMix(payload)
 
             if !selectedTagIds.isEmpty {
@@ -1102,18 +1035,27 @@ final class CreateMixViewModel {
                 }
 
             case .video:
-                if var data = videoData {
-                    data = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: data, fileName: "video.mp4", contentType: "video/mp4")
+                if let data = videoData {
+                    let compressed = try await compressVideo(data: data)
+                    let url = try await repo.uploadMedia(data: compressed, fileName: "video.mp4", contentType: "video/mp4")
                     payload.videoUrl = url
+                    // Extract audio track (or generate silence for muted videos)
+                    let audioTrackData = try await extractOrGenerateSilence(from: data)
+                    let compressedAudio = try await compressAudio(data: audioTrackData)
+                    let audioUrl = try await repo.uploadMedia(data: compressedAudio, fileName: "video_audio.m4a", contentType: "audio/aac")
+                    payload.audioUrl = audioUrl
                 }
 
             case .import:
                 payload.importSourceUrl = importSourceUrl
-                if var data = importMediaData {
-                    data = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: data, fileName: "import_video.mp4", contentType: "video/mp4")
+                if let data = importMediaData {
+                    let compressed = try await compressVideo(data: data)
+                    let url = try await repo.uploadMedia(data: compressed, fileName: "import_video.mp4", contentType: "video/mp4")
                     payload.importMediaUrl = url
+                    // If no separate audio was provided, extract from the video
+                    if importAudioData == nil {
+                        importAudioData = try await extractOrGenerateSilence(from: data)
+                    }
                 }
                 if var data = importAudioData {
                     data = try await compressAudio(data: data)
@@ -1197,6 +1139,42 @@ final class CreateMixViewModel {
                 } catch {
                     // Embedding generation failed — continue saving without embedding
                 }
+            }
+
+            // Capture screenshot (non-fatal)
+            do {
+                let thumbnail: UIImage? = switch mixType {
+                case .photo: photoThumbnail
+                case .video: videoThumbnail
+                case .import: importThumbnail ?? videoThumbnail
+                default: nil
+                }
+                let embedImg: UIImage? = if let data = embedOgImageData { UIImage(data: data) } else { nil }
+
+                if let screenshot = ScreenshotService.capture(
+                    mixType: mixType,
+                    textContent: textContent,
+                    mediaThumbnail: thumbnail,
+                    embedUrl: hasEmbed ? embedUrl : nil,
+                    embedOg: embedOg,
+                    embedImage: embedImg
+                ), let jpegData = screenshot.jpegData(compressionQuality: 0.7) {
+                    let screenshotUrl = try await repo.uploadMedia(data: jpegData, fileName: "screenshot.jpg", contentType: "image/jpeg")
+                    payload.screenshotUrl = screenshotUrl
+
+                    let scaleY = ScreenshotService.computeScaleY(
+                        mixType: mixType,
+                        textContent: textContent,
+                        mediaThumbnail: thumbnail,
+                        importHasVideo: importMediaData != nil,
+                        embedImage: embedImg,
+                        embedUrl: hasEmbed ? embedUrl : nil,
+                        embedOg: embedOg
+                    )
+                    payload.previewScaleY = scaleY
+                }
+            } catch {
+                // Screenshot capture/upload failed — continue without it
             }
 
             _ = try await repo.updateMix(id: mixId, payload)
