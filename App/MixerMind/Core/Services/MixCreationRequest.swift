@@ -6,12 +6,12 @@ struct MixCreationRequest: Codable {
     let createdAt: Date
     var textContent: String?
     var title: String?
-    var autoCreateTitle: Bool = true
     var selectedTagIds: [UUID] = []
     var embedUrl: String?
     var embedOgJson: Data?           // Encoded OGMetadata
     var importSourceUrl: String?
     var isAudioFromTTS: Bool = false
+    var audioRemoved: Bool = false
     var audioFileName: String?
 
     // Local file paths (relative to MixMedia/) for raw media saved in Phase 1

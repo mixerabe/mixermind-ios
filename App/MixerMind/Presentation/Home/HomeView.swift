@@ -10,7 +10,7 @@ struct HomeView: View {
     var onDisconnect: () -> Void
 
     // Viewer overlay state
-    @State private var viewerVM: MixViewerViewModel?
+    @State private var viewerVM: MixViewModel?
     @State private var isViewerExpanded = false
 
     // Drag-to-minimize state
@@ -27,6 +27,8 @@ struct HomeView: View {
     @State private var heroFinished = false
 
 
+    // Creator sheet
+    @State private var showCreator = false
     // Card frame tracking for hero animations
     @State private var cardFrames: [UUID: CGRect] = [:]
     @State private var ignoreCardTaps = false
@@ -125,6 +127,8 @@ struct HomeView: View {
                     viewModel.loadTags(modelContext: modelContext)
                     await viewModel.loadSavedViews()
                 }
+
+
             }
 
             // Black backdrop — fully opaque when expanded, transparent when mini
@@ -161,7 +165,7 @@ struct HomeView: View {
                     .compactMap { $0 as? UIWindowScene }
                     .first?.windows.first?.safeAreaInsets.top ?? 0
 
-                MixViewerView(
+                MixView(
                     viewModel: vm,
                     onMinimize: { withAnimation(.spring(duration: 0.35)) { isViewerExpanded = false } },
                     onDismiss: dismissViewer,
@@ -182,7 +186,7 @@ struct HomeView: View {
                     y: isViewerExpanded ? canvasH / 2 : miniTargetPosition.y
                 )
                 .overlay(alignment: .topLeading) {
-                    if isViewerExpanded {
+                    if isViewerExpanded && vm.mode == .view {
                         Color.clear
                             .frame(width: 44, height: canvasH - 44)
                             .contentShape(Rectangle())
@@ -200,8 +204,8 @@ struct HomeView: View {
                 .animation(.spring(duration: 0.35), value: vm.currentMix.id)
                 .zIndex(10)
 
-                // Mini drag target — inset from top/bottom to leave buttons exposed
-                if !isViewerExpanded {
+                // Mini drag target — inset from top/bottom to leave buttons exposed (view mode only)
+                if !isViewerExpanded && vm.mode == .view {
                     let inset: CGFloat = 38
                     Color.clear
                         .frame(width: Self.miniCardWidth, height: max(currentMiniCardHeight - inset * 2, 20))
@@ -230,6 +234,30 @@ struct HomeView: View {
         }
         .coordinateSpace(name: "home-root")
         .animation(.spring(duration: 0.35), value: isViewerExpanded)
+        .fullScreenCover(isPresented: $showCreator) {
+            CreatorView(
+                onDismiss: { showCreator = false },
+                onDone: { mix, creatorMedia in
+                    let vm = MixViewModel(editing: mix)
+                    switch creatorMedia {
+                    case .photo(let data, let thumbnail):
+                        vm.editState.photoData = data
+                        vm.editState.mediaThumbnail = thumbnail
+                    case .video(let data, let thumbnail):
+                        vm.editState.videoData = data
+                        vm.editState.mediaThumbnail = thumbnail
+                    case .audio(let data, let fileName):
+                        vm.editState.audioData = data
+                        vm.editState.audioFileName = fileName
+                    case nil:
+                        break
+                    }
+                    viewerVM = vm
+                    isViewerExpanded = true
+                    showCreator = false
+                }
+            )
+        }
     }
 
     // MARK: - Viewer Helpers
@@ -370,7 +398,7 @@ struct HomeView: View {
 
     private func performOpenViewer(mixes: [Mix], startIndex: Int) {
         miniPlayerCorner = .bottomTrailing
-        let vm = MixViewerViewModel(mixes: mixes, startIndex: startIndex)
+        let vm = MixViewModel(mixes: mixes, startIndex: startIndex)
         viewerVM = vm
         withAnimation(.spring(duration: 0.35)) { isViewerExpanded = true }
     }
@@ -395,7 +423,7 @@ struct HomeView: View {
 
         // 2. Create viewer VM now so it has time to render while hero animates.
         //    It's hidden behind the hero (zIndex 15 > 10).
-        let vm = MixViewerViewModel(mixes: mixes, startIndex: startIndex)
+        let vm = MixViewModel(mixes: mixes, startIndex: startIndex)
         viewerVM = vm
         isViewerExpanded = true
 
@@ -752,35 +780,48 @@ extension HomeView {
                 .opacity(isSearchMode ? 1 : 0)
                 .allowsHitTesting(isSearchMode)
 
-                Menu {
-                    Button { viewModel.navigationPath.append(.createPhoto) } label: {
-                        Label("Gallery", systemImage: "photo.on.rectangle")
+                HStack(spacing: 8) {
+                    // New creator flow
+                    Button { showCreator = true } label: {
+                        Image(systemName: "plus")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 52, height: 52)
+                            .contentShape(Rectangle())
                     }
-                    Button { viewModel.navigationPath.append(.createURLImport) } label: {
-                        Label("Import", systemImage: "play.rectangle")
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .circle)
+
+                    // Legacy create menu
+                    Menu {
+                        Button { viewModel.navigationPath.append(.createPhoto) } label: {
+                            Label("Gallery", systemImage: "photo.on.rectangle")
+                        }
+                        Button { viewModel.navigationPath.append(.createURLImport) } label: {
+                            Label("Import", systemImage: "play.rectangle")
+                        }
+                        Button { viewModel.navigationPath.append(.createEmbed) } label: {
+                            Label("Embed", systemImage: "link.badge.plus")
+                        }
+                        Button { viewModel.navigationPath.append(.createRecordAudio) } label: {
+                            Label("Record", systemImage: "mic")
+                        }
+                        Button { viewModel.navigationPath.append(.createText) } label: {
+                            Label("Text", systemImage: "textformat")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 52, height: 52)
+                            .contentShape(Rectangle())
                     }
-                    Button { viewModel.navigationPath.append(.createEmbed) } label: {
-                        Label("Embed", systemImage: "link.badge.plus")
-                    }
-                    Button { viewModel.navigationPath.append(.createRecordAudio) } label: {
-                        Label("Record", systemImage: "mic")
-                    }
-                    Button { viewModel.navigationPath.append(.createText) } label: {
-                        Label("Text", systemImage: "textformat")
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 52, height: 52)
-                        .contentShape(Rectangle())
-                        .glassEffect(in: .circle)
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .circle)
                 }
-                .buttonStyle(.plain)
                 .opacity(isSearchMode ? 0 : 1)
                 .allowsHitTesting(!isSearchMode)
             }
-            .frame(width: 52, height: 52)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
@@ -796,4 +837,5 @@ extension HomeView {
         isSearchMode = false
         viewModel.clearSearch()
     }
+
 }

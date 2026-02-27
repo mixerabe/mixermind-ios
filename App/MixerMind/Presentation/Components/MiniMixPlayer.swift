@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MiniMixPlayer: View {
-    var viewModel: MixViewerViewModel
+    var viewModel: MixViewModel
     var coordinator: AudioPlaybackCoordinator
     var onExpand: () -> Void
     var onDismiss: () -> Void

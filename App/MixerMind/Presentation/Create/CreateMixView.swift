@@ -75,21 +75,15 @@ struct MixCanvasContent: View {
 
     private var textView: some View {
         Text(textContent)
-            .font(.system(size: dynamicFontSize, weight: .medium))
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.white)
-            .shadow(radius: 2)
-            .padding(24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var dynamicFontSize: CGFloat {
-        let length = textContent.count
-        if length < 20 { return 32 }
-        if length < 50 { return 26 }
-        if length < 100 { return 22 }
-        if length < 200 { return 18 }
-        return 14
+            .font(.system(size: 17, weight: .regular))
+            .lineSpacing(6)
+            .multilineTextAlignment(.leading)
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(.leading, 24)
+            .padding(.trailing, 24)
+            .padding(.top, 120)
+            .padding(.bottom, 200)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

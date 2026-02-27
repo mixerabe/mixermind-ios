@@ -41,6 +41,7 @@ struct MixCanvasView: View {
     var dragProgress: CGFloat = 0
 
     @State private var scrubStartProgress: Double = 0
+    @State private var textContentHeight: CGFloat = 0
 
     private static let darkBg = Color.blue
 
@@ -123,13 +124,7 @@ struct MixCanvasView: View {
 
         case .text:
             if hasText {
-                Text(textContent)
-                    .font(.system(size: dynamicFontSize, weight: .medium))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
-                    .shadow(radius: 2)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                noteTextView
             } else if let action = onPlaceholderTap {
                 Button {
                     action()
@@ -253,33 +248,87 @@ struct MixCanvasView: View {
     // MARK: - Paused Overlay
 
     private var pausedOverlay: some View {
-        Color.clear
-            .contentShape(.rect)
-            .onTapGesture {
+        VStack(spacing: 16) {
+            // Play button → resume
+            Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     onTogglePause()
                 }
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.white)
+                    .frame(width: 72, height: 72)
+                    .glassEffect(in: .circle)
             }
-            .overlay {
-                VStack(spacing: 16) {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.white)
-                        .frame(width: 72, height: 72)
-                        .glassEffect(in: .circle)
+            .buttonStyle(.plain)
 
-                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 44, height: 44)
-                        .glassEffect(in: .circle)
-                        .onTapGesture {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                onToggleMute()
-                            }
-                        }
+            // Mute button → toggle mute (does NOT resume)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    onToggleMute()
                 }
+            } label: {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 44, height: 44)
+                    .glassEffect(in: .circle)
             }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            // Background tap → resume playback
+            Color.black.opacity(0.001)
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        onTogglePause()
+                    }
+                }
+        }
+    }
+
+    // MARK: - Note-style Text View
+
+    private var noteTextView: some View {
+        GeometryReader { container in
+            let containerHeight = container.size.height
+
+            Text(textContent)
+                .font(.system(size: 17, weight: .regular))
+                .lineSpacing(6)
+                .multilineTextAlignment(.leading)
+                .foregroundStyle(.white.opacity(0.9))
+                .padding(.leading, 24)
+                .padding(.trailing, 24)
+                .padding(.top, 120)
+                .padding(.bottom, 200)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    GeometryReader { textGeo in
+                        Color.clear.preference(
+                            key: TextHeightKey.self,
+                            value: textGeo.size.height
+                        )
+                    }
+                )
+                .offset(y: noteScrollOffset(
+                    contentHeight: textContentHeight,
+                    containerHeight: containerHeight
+                ))
+                .onPreferenceChange(TextHeightKey.self) { height in
+                    textContentHeight = height
+                }
+        }
+        .clipped()
+    }
+
+    private func noteScrollOffset(contentHeight: CGFloat, containerHeight: CGFloat) -> CGFloat {
+        let overflow = contentHeight - containerHeight
+        guard overflow > 0, hasPlayback else { return 0 }
+        return -overflow * playbackProgress
     }
 
     // MARK: - Helpers
@@ -313,5 +362,12 @@ extension Color {
             green: Double((rgb >> 8) & 0xFF) / 255,
             blue: Double(rgb & 0xFF) / 255
         )
+    }
+}
+
+private struct TextHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

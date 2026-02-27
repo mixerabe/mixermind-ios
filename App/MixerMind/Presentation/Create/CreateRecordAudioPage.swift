@@ -40,14 +40,10 @@ struct CreateRecordAudioPage: View {
             ToolbarItem(placement: .principal) {
                 titleChipButton
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                sparklesToolbarButton
-            }
         }
         .sheet(isPresented: $isEditingTitle) {
             RecordTitleEditSheet(
                 title: $titleDraft,
-                autoCreateTitle: $createViewModel.autoCreateTitle,
                 onDone: {
                     createViewModel.title = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     isEditingTitle = false
@@ -83,60 +79,16 @@ struct CreateRecordAudioPage: View {
             titleDraft = createViewModel.title
             isEditingTitle = true
         } label: {
-            HStack(spacing: 6) {
-                if createViewModel.autoCreateTitle && createViewModel.title.isEmpty {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.yellow.opacity(0.8))
-                }
-                Text(
-                    createViewModel.title.isEmpty
-                        ? (createViewModel.autoCreateTitle ? "Auto Title" : "Add title")
-                        : createViewModel.title
-                )
+            Text(createViewModel.title.isEmpty ? "Add title" : createViewModel.title)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(
-                    createViewModel.title.isEmpty
-                        ? (createViewModel.autoCreateTitle ? .yellow.opacity(0.7) : .white.opacity(0.4))
-                        : .white
-                )
+                .foregroundStyle(createViewModel.title.isEmpty ? .white.opacity(0.4) : .white)
                 .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 34)
-            .contentShape(.capsule)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(in: .capsule)
-    }
-
-    // MARK: - Sparkles Toolbar Button (navbar right)
-
-    private var sparklesToolbarButton: some View {
-        Button {
-            withAnimation(.spring(duration: 0.25)) {
-                if createViewModel.title.isEmpty {
-                    // toggle auto
-                    createViewModel.autoCreateTitle.toggle()
-                } else {
-                    // open sheet where they can manage it
-                    titleDraft = createViewModel.title
-                    isEditingTitle = true
-                }
-            }
-        } label: {
-            Image(systemName: "sparkles")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(
-                    createViewModel.autoCreateTitle && createViewModel.title.isEmpty
-                        ? .yellow
-                        : .white.opacity(0.4)
-                )
-                .frame(width: 34, height: 34)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(in: .circle)
     }
 
     // MARK: - Background
@@ -190,8 +142,8 @@ struct CreateRecordAudioPage: View {
 
             Spacer()
 
-            // Right: sparkles
-            sparklesToolbarButton
+            // Right: keep symmetry with left back button
+            Color.clear.frame(width: 44, height: 44)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -238,7 +190,7 @@ struct CreateRecordAudioPage: View {
         VStack(spacing: 16) {
             ProgressView()
                 .scaleEffect(1.2)
-            Text(createViewModel.isGeneratingTitle ? "Generating title…" : "Saving…")
+            Text("Saving…")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -507,7 +459,6 @@ struct CreateRecordAudioPage: View {
 
 struct RecordTitleEditSheet: View {
     @Binding var title: String
-    @Binding var autoCreateTitle: Bool
     var onDone: () -> Void
     var onCancel: () -> Void
 
@@ -528,34 +479,8 @@ struct RecordTitleEditSheet: View {
                         if newValue.count > 60 {
                             title = String(newValue.prefix(60))
                         }
-                        if !newValue.isEmpty {
-                            autoCreateTitle = false
-                        }
                     }
                     .padding(.horizontal, 32)
-
-                // Auto title button below the field
-                Button {
-                    withAnimation(.spring(duration: 0.25)) {
-                        if !title.isEmpty { title = "" }
-                        autoCreateTitle = true
-                        onDone()
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.yellow)
-                        Text("Auto Title")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(autoCreateTitle && title.isEmpty ? .yellow : .secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 16)
-
                 Spacer()
             }
             .navigationTitle("Title")
@@ -572,7 +497,6 @@ struct RecordTitleEditSheet: View {
                         Image(systemName: "checkmark")
                             .fontWeight(.semibold)
                     }
-                    .disabled(title.isEmpty && !autoCreateTitle)
                 }
             }
         }

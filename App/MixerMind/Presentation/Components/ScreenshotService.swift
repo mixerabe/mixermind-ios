@@ -87,35 +87,27 @@ enum ScreenshotService {
     }
 
     /// For text: measure how tall the text actually renders using the same font as MixCanvasContent,
-    /// then compute scaleY = canvasHeight / textHeight.
+    /// then compute scaleY = canvasHeight / textHeight. Capped at 2.0 to show the beginning of the note.
     private static func textScaleY(for text: String) -> Double {
         guard !text.isEmpty else { return 1.0 }
 
-        let fontSize = textFontSize(for: text)
-        let font = UIFont.systemFont(ofSize: fontSize, weight: .medium)
+        let font = UIFont.systemFont(ofSize: 17, weight: .regular)
         let maxWidth = canvasWidth - 48 // 24px padding each side, matching MixCanvasContent
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 6
 
         let boundingRect = (text as NSString).boundingRect(
             with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: font],
+            attributes: [.font: font, .paragraphStyle: paragraphStyle],
             context: nil
         )
 
-        let textHeight = ceil(boundingRect.height)
+        let textHeight = ceil(boundingRect.height) + 120 + 200 // top + bottom padding
         guard textHeight > 0 else { return 1.0 }
 
-        return min(Double(canvasHeight / textHeight), 2.5)
-    }
-
-    /// Matches MixCanvasContent.dynamicFontSize
-    private static func textFontSize(for text: String) -> CGFloat {
-        let length = text.count
-        if length < 20 { return 32 }
-        if length < 50 { return 26 }
-        if length < 100 { return 22 }
-        if length < 200 { return 18 }
-        return 14
+        return min(Double(canvasHeight / textHeight), 2.0)
     }
 
     /// Extract dominant gradient colors from the top and bottom strips of a captured image.

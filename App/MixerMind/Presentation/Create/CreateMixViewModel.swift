@@ -74,8 +74,6 @@ final class CreateMixViewModel {
 
     // Title
     var title: String = ""
-    var autoCreateTitle = true
-    var isGeneratingTitle = false
 
     // MARK: - Edit Mode
 
@@ -570,17 +568,6 @@ final class CreateMixViewModel {
         }
 
         isFetchingOG = false
-
-        // Auto-generate title: "Host -- Page Title" (capped at 50 chars)
-        let ogTitle = embedOg?.title
-        let host = embedOg?.host
-        if let ogTitle, !ogTitle.isEmpty, let host, !host.isEmpty {
-            title = String("\(host) -- \(ogTitle)".prefix(50))
-        } else if let ogTitle, !ogTitle.isEmpty {
-            title = String(ogTitle.prefix(50))
-        } else if let host, !host.isEmpty {
-            title = host
-        }
     }
 
     // MARK: - Clear
@@ -807,7 +794,6 @@ final class CreateMixViewModel {
             createdAt: Date(),
             textContent: hasText ? textContent : nil,
             title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : title.trimmingCharacters(in: .whitespacesAndNewlines),
-            autoCreateTitle: autoCreateTitle,
             selectedTagIds: Array(selectedTagIds),
             embedUrl: hasEmbed ? embedUrl : nil,
             importSourceUrl: importSourceUrl,

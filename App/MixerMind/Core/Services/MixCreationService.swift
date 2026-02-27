@@ -239,6 +239,13 @@ final class MixCreationService {
                     payload.photoThumbnailUrl = url
                     localPaths["photoThumb"] = path
                 }
+                // AI Summary audio
+                if let path = request.rawAudioPath, let data = readFile(path) {
+                    let compressed = try await compressAudio(data: data, fileName: "ai_summary.m4a")
+                    let audioUrl = try await repo.uploadMedia(data: compressed, fileName: "ai_summary.m4a", contentType: "audio/aac")
+                    payload.audioUrl = audioUrl
+                    localPaths["audio"] = saveLocal(compressed, name: "ai_summary.m4a")
+                }
 
             case .video:
                 if let path = request.rawVideoPath, let data = readFile(path) {
@@ -246,8 +253,14 @@ final class MixCreationService {
                     let url = try await repo.uploadMedia(data: compressed, fileName: "video.mp4", contentType: "video/mp4")
                     payload.videoUrl = url
                     localPaths["video"] = saveLocal(compressed, name: "video.mp4")
-                    // Extract audio track (or generate silence for muted videos)
-                    let audioTrackData = try await extractOrGenerateSilence(from: data)
+                    // Audio: generate silence if user removed audio, otherwise extract/fallback
+                    let audioTrackData: Data
+                    if request.audioRemoved {
+                        let duration = try await videoDuration(from: data)
+                        audioTrackData = try generateSilence(duration: duration)
+                    } else {
+                        audioTrackData = try await extractOrGenerateSilence(from: data)
+                    }
                     let compressedAudio = try await compressAudio(data: audioTrackData, fileName: "video_audio.m4a")
                     let audioUrl = try await repo.uploadMedia(data: compressedAudio, fileName: "video_audio.m4a", contentType: "audio/aac")
                     payload.audioUrl = audioUrl
@@ -268,8 +281,11 @@ final class MixCreationService {
                     let url = try await repo.uploadMedia(data: compressed, fileName: "import_video.mp4", contentType: "video/mp4")
                     payload.importMediaUrl = url
                     localPaths["importMedia"] = saveLocal(compressed, name: "import_video.mp4")
-                    // If no separate audio was provided, extract from the video
-                    if request.rawImportAudioPath == nil {
+                    // Audio: generate silence if user removed audio, otherwise extract/fallback
+                    if request.audioRemoved {
+                        let duration = try await videoDuration(from: data)
+                        importAudioData = try generateSilence(duration: duration)
+                    } else if request.rawImportAudioPath == nil {
                         importAudioData = try await extractOrGenerateSilence(from: data)
                     }
                 }
@@ -310,6 +326,13 @@ final class MixCreationService {
                         imageUrl: nil,
                         host: ogMeta?.host ?? ""
                     )
+                }
+                // AI Summary audio
+                if let path = request.rawAudioPath, let data = readFile(path) {
+                    let compressed = try await compressAudio(data: data, fileName: "ai_summary.m4a")
+                    let audioUrl = try await repo.uploadMedia(data: compressed, fileName: "ai_summary.m4a", contentType: "audio/aac")
+                    payload.audioUrl = audioUrl
+                    localPaths["audio"] = saveLocal(compressed, name: "ai_summary.m4a")
                 }
 
             case .audio:
@@ -369,29 +392,10 @@ final class MixCreationService {
 
             try Task.checkCancellation()
 
-            // 3. Auto-generate title (non-fatal)
+            // 3. Set title if provided
             let trimmedTitle = (request.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedTitle.isEmpty {
                 payload.title = trimmedTitle
-            } else if request.autoCreateTitle {
-                do {
-                    let generated: String
-                    switch request.mixType {
-                    case .text:
-                        if let text = request.textContent, !text.isEmpty {
-                            generated = try await TitleService.fromText(text)
-                        } else { generated = "" }
-                    case .audio:
-                        if let path = request.rawAudioPath, let data = readFile(path) {
-                            let name = request.audioFileName ?? "audio.m4a"
-                            let ct = name.hasSuffix(".mp3") ? "audio/mpeg" : "audio/m4a"
-                            generated = try await TitleService.fromAudio(data: data, fileName: name, contentType: ct)
-                        } else { generated = "" }
-                    default:
-                        generated = ""
-                    }
-                    if !generated.isEmpty { payload.title = generated }
-                } catch {}
             }
 
             try Task.checkCancellation()

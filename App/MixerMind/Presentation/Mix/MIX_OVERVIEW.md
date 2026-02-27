@@ -3,8 +3,8 @@
 Full-screen mix viewer with TikTok-style vertical swipe navigation.
 
 ## Files
-- `MixViewerView.swift` — Full-screen view with vertical TabView paging
-- `MixViewerViewModel.swift` — URL-based playback (video + audio from Supabase Storage)
+- `MixView.swift` — Full-screen view with vertical TabView paging
+- `MixViewModel.swift` — URL-based playback (video + audio from Supabase Storage)
 
 ## Behavior
 - Opens from HomeView grid cell tap at the tapped mix's position

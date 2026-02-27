@@ -2,8 +2,8 @@ import SwiftUI
 import SwiftData
 import AVFoundation
 
-struct MixViewerView: View {
-    @Bindable var viewModel: MixViewerViewModel
+struct MixView: View {
+    @Bindable var viewModel: MixViewModel
     var onMinimize: () -> Void
     var onDismiss: () -> Void
     var onDeleted: ((UUID) -> Void)?
@@ -48,10 +48,28 @@ struct MixViewerView: View {
                 .opacity(chromeOpacity)
                 .allowsHitTesting(!isMinimized)
 
-            // Mini controls — big buttons that scale down naturally with the viewer
-            miniControls
-                .opacity(isMinimized ? 1 : 0)
-                .allowsHitTesting(isMinimized)
+            // Mini controls — big buttons that scale down naturally with the viewer (view mode only)
+            if viewModel.mode == .view {
+                miniControls
+                    .opacity(isMinimized ? 1 : 0)
+                    .allowsHitTesting(isMinimized)
+            }
+
+            // Audio chip — bottom left (edit & view)
+            if showAudioChip {
+                VStack {
+                    Spacer()
+                    HStack {
+                        audioChipView
+                            .padding(.leading, 24)
+                            .padding(.bottom, 32)
+                        Spacer()
+                    }
+                }
+                .frame(width: canvasSize.width, height: canvasSize.height)
+                .opacity(chromeOpacity)
+                .allowsHitTesting(!isMinimized)
+            }
         }
         .sheet(isPresented: $isEditingTitle) {
             TitleEditSheet(
@@ -112,7 +130,7 @@ struct MixViewerView: View {
             .scrollTargetLayout()
         }
         .scrollTargetBehavior(.paging)
-        .scrollDisabled(isMinimized)
+        .scrollDisabled(isMinimized || viewModel.mode == .edit)
         .scrollIndicators(.hidden)
         .scrollPosition(id: $viewModel.scrolledID, anchor: .top)
         .ignoresSafeArea(.keyboard)
@@ -198,24 +216,10 @@ struct MixViewerView: View {
 
     private var topChrome: some View {
         HStack {
-            // Left: menu
-            if !viewModel.mixes.isEmpty {
-                Menu {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            viewModel.isAutoScroll.toggle()
-                        }
-                    } label: {
-                        Label(
-                            viewModel.isAutoScroll ? "Stop Auto-scroll" : "Auto-scroll",
-                            systemImage: viewModel.isAutoScroll ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
-                        )
-                    }
-                    Button("Delete", role: .destructive) {
-                        showDeleteAlert = true
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
+            // Left slot
+            if viewModel.mode == .edit {
+                Button { onDismiss() } label: {
+                    Image(systemName: "xmark")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
@@ -223,6 +227,8 @@ struct MixViewerView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(in: .circle)
+            } else if !viewModel.mixes.isEmpty {
+                viewModeMenu
             } else {
                 Color.clear.frame(width: 44, height: 44)
             }
@@ -236,19 +242,150 @@ struct MixViewerView: View {
 
             Spacer()
 
-            // Right: close button
-            Button { onDismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+            // Right slot
+            if viewModel.mode == .edit {
+                Button {
+                    if viewModel.publishMix() {
+                        onDismiss()
+                    }
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(in: .circle)
+            } else {
+                Button { onDismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(in: .circle)
             }
-            .buttonStyle(.plain)
-            .glassEffect(in: .circle)
         }
         .padding(.horizontal, 16)
         .frame(width: canvasSize.width)
+    }
+
+    // MARK: - Audio Chip
+
+    private var showAudioChip: Bool {
+        if viewModel.mode == .edit { return true }
+        return viewModel.viewerChipLabel != nil
+    }
+
+    @ViewBuilder
+    private var audioChipView: some View {
+        if viewModel.mode == .edit {
+            editAudioChip
+        } else {
+            viewerAudioChip
+        }
+    }
+
+    private var editAudioChip: some View {
+        Group {
+            if viewModel.chipHasGenerateAction {
+                // Tappable: generates TTS or AI Summary
+                Button {
+                    if viewModel.currentMix.type == .text {
+                        viewModel.generateTTS()
+                    } else {
+                        viewModel.generateAISummary()
+                    }
+                } label: {
+                    audioChipLabel
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.chipIsLoading)
+            } else if viewModel.canRemoveAudio {
+                // Menu: shows "Remove audio"
+                Menu {
+                    Button(role: .destructive) {
+                        viewModel.removeAudio()
+                    } label: {
+                        Label("Remove audio", systemImage: "speaker.slash")
+                    }
+                } label: {
+                    audioChipLabel
+                }
+                .buttonStyle(.plain)
+            } else {
+                // Informational only (e.g. "Original audio", "No audio" for video)
+                audioChipLabel
+            }
+        }
+    }
+
+    private var viewerAudioChip: some View {
+        HStack(spacing: 6) {
+            if let icon = viewModel.viewerChipIcon {
+                Image(systemName: icon)
+                    .font(.caption.weight(.semibold))
+            }
+            if let label = viewModel.viewerChipLabel {
+                Text(label)
+                    .font(.caption.weight(.medium))
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .glassEffect(in: .capsule)
+    }
+
+    private var audioChipLabel: some View {
+        HStack(spacing: 6) {
+            if viewModel.chipIsLoading {
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(0.8)
+            } else {
+                Image(systemName: viewModel.editChipIcon)
+                    .font(.caption.weight(.semibold))
+            }
+            Text(viewModel.editChipLabel)
+                .font(.caption.weight(.medium))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .contentShape(.capsule)
+        .glassEffect(in: .capsule)
+    }
+
+    // MARK: - View Mode Menu
+
+    private var viewModeMenu: some View {
+        Menu {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    viewModel.isAutoScroll.toggle()
+                }
+            } label: {
+                Label(
+                    viewModel.isAutoScroll ? "Stop Auto-scroll" : "Auto-scroll",
+                    systemImage: viewModel.isAutoScroll ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
+                )
+            }
+            Button("Delete", role: .destructive) {
+                showDeleteAlert = true
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(in: .circle)
     }
 
 
@@ -276,10 +413,12 @@ struct MixViewerView: View {
             }
         }()
 
+        let editThumbnail: UIImage? = (viewModel.mode == .edit && isCurrent) ? viewModel.editState.mediaThumbnail : nil
+
         return MixCanvasView(
             mixType: mix.type,
             textContent: mix.textContent ?? "",
-            mediaThumbnail: nil,
+            mediaThumbnail: editThumbnail,
             mediaUrl: mediaUrl,
             thumbnailUrl: thumbnailUrl,
             videoPlayer: isCurrent ? viewModel.videoPlayer : nil,
@@ -418,7 +557,7 @@ private struct TitleEditSheet: View {
 }
 
 struct ViewerTagBar: View {
-    @Bindable var viewModel: MixViewerViewModel
+    @Bindable var viewModel: MixViewModel
     @State private var showNewTagSheet = false
 
     var body: some View {

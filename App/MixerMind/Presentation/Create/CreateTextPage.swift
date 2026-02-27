@@ -67,14 +67,10 @@ struct CreateTextPage: View {
             ToolbarItem(placement: .principal) {
                 titleChipButton
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                sparklesToolbarButton
-            }
         }
         .sheet(isPresented: $isEditingTitle) {
             RecordTitleEditSheet(
                 title: $titleDraft,
-                autoCreateTitle: $viewModel.autoCreateTitle,
                 onDone: {
                     viewModel.title = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     isEditingTitle = false
@@ -101,56 +97,16 @@ struct CreateTextPage: View {
             titleDraft = viewModel.title
             isEditingTitle = true
         } label: {
-            HStack(spacing: 6) {
-                if viewModel.autoCreateTitle && viewModel.title.isEmpty {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.yellow.opacity(0.8))
-                }
-                Text(
-                    viewModel.title.isEmpty
-                        ? (viewModel.autoCreateTitle ? "Auto Title" : "Add title")
-                        : viewModel.title
-                )
+            Text(viewModel.title.isEmpty ? "Add title" : viewModel.title)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(
-                    viewModel.title.isEmpty
-                        ? (viewModel.autoCreateTitle ? .yellow.opacity(0.7) : .white.opacity(0.4))
-                        : .white
-                )
+                .foregroundStyle(viewModel.title.isEmpty ? .white.opacity(0.4) : .white)
                 .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 34)
-            .contentShape(.capsule)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .glassEffect(in: .capsule)
-    }
-
-    private var sparklesToolbarButton: some View {
-        Button {
-            withAnimation(.spring(duration: 0.25)) {
-                if viewModel.title.isEmpty {
-                    viewModel.autoCreateTitle.toggle()
-                } else {
-                    titleDraft = viewModel.title
-                    isEditingTitle = true
-                }
-            }
-        } label: {
-            Image(systemName: "sparkles")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(
-                    viewModel.autoCreateTitle && viewModel.title.isEmpty
-                        ? .yellow
-                        : .white.opacity(0.4)
-                )
-                .frame(width: 34, height: 34)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .glassEffect(in: .circle)
     }
 
     // MARK: - Text Canvas
@@ -211,7 +167,6 @@ struct CreateTextPage: View {
     }
 
     private var savingLabel: String {
-        if viewModel.isGeneratingTitle { return "Generating title..." }
         if viewModel.isGeneratingTTS { return "Generating audio..." }
         return "Saving..."
     }
