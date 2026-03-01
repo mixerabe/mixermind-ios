@@ -1,18 +1,12 @@
 import SwiftUI
-import SwiftData
-
-enum HomeDestination: Hashable {
-    case createPhoto, createURLImport, createEmbed
-    case createRecordAudio, createText
-}
+import CoreData
 
 @Observable @MainActor
 final class HomeViewModel {
     var mixes: [Mix] = []
     var isLoading = false
     var errorMessage: String?
-    var navigationPath: [HomeDestination] = []
-    var showDisconnectAlert = false
+    var navigationPath = NavigationPath()
 
     // MARK: - Tags (local progressive narrowing)
 
@@ -93,7 +87,7 @@ final class HomeViewModel {
     var isSearchActive = false
     private var searchTask: Task<Void, Never>?
 
-    func search(query: String, modelContext: ModelContext) {
+    func search(query: String, context: NSManagedObjectContext) {
         searchTask?.cancel()
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -119,7 +113,7 @@ final class HomeViewModel {
                     query: trimmed,
                     tagIds: tagFilter,
                     mixTagMap: tagMap,
-                    modelContext: modelContext
+                    context: context
                 )
                 guard !Task.isCancelled else { return }
                 self.searchResultIds = results.map(\.id)
@@ -149,61 +143,44 @@ final class HomeViewModel {
     private let savedViewRepo: SavedViewRepository = resolve()
     let syncEngine: SyncEngine = resolve()
 
-    func loadMixes(modelContext: ModelContext) async {
+    func loadMixes(context: NSManagedObjectContext) async {
         isLoading = true
         errorMessage = nil
 
-        // Sync with Supabase (downloads new media, removes deleted)
-        await syncEngine.sync(modelContext: modelContext)
+        // Run local tasks (generate missing embeddings, populate silence placeholders)
+        await syncEngine.sync(context: context)
 
-        // Read from SwiftData (propagate creationStatus)
         do {
-            let descriptor = FetchDescriptor<LocalMix>(
-                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-            )
-            let localMixes = try modelContext.fetch(descriptor)
-            mixes = localMixes.map { local in
-                var mix = local.toMix()
-                mix.creationStatus = local.creationStatus
-                return mix
-            }
+            mixes = try repo.listMixesWithTags(context: context)
         } catch {
-            // Fallback: try direct from Supabase
-            do {
-                mixes = try await repo.listMixes()
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+            errorMessage = error.localizedDescription
         }
         isLoading = false
     }
 
-    /// Fast local-only reload — no network. Used when returning from create page
-    /// and when background creation status changes.
-    func reloadFromLocal(modelContext: ModelContext) {
-        let descriptor = FetchDescriptor<LocalMix>(
-            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
-        )
-        guard let localMixes = try? modelContext.fetch(descriptor) else { return }
-        mixes = localMixes.map { local in
-            var mix = local.toMix()
-            mix.creationStatus = local.creationStatus
-            return mix
+    /// Sync tag changes from the viewer VM back into home state.
+    func syncFromViewer(_ viewerMixes: [Mix], context: NSManagedObjectContext) {
+        let updated = Dictionary(uniqueKeysWithValues: viewerMixes.map { ($0.id, $0) })
+        for i in mixes.indices {
+            if let m = updated[mixes[i].id] {
+                mixes[i].tags = m.tags
+            }
         }
-        loadTags(modelContext: modelContext)
+        loadTags(context: context)
     }
 
-    func loadTags(modelContext: ModelContext) {
+    /// Fast local-only reload. Used when returning from create page.
+    func reloadFromLocal(context: NSManagedObjectContext) {
         do {
-            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
-            allTags = localTags.map { $0.toTag() }
+            mixes = try repo.listMixesWithTags(context: context)
+        } catch {}
+        loadTags(context: context)
+    }
 
-            let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
-            var map: [UUID: Set<UUID>] = [:]
-            for row in localMixTags {
-                map[row.mixId, default: []].insert(row.tagId)
-            }
-            mixTagMap = map
+    func loadTags(context: NSManagedObjectContext) {
+        do {
+            allTags = try tagRepo.listTags(context: context)
+            mixTagMap = try tagRepo.tagMap(context: context)
 
             let validIds = Set(allTags.map(\.id))
             selectedTagIds.formIntersection(validIds)
@@ -220,36 +197,14 @@ final class HomeViewModel {
         mixes.removeAll { $0.id == id }
     }
 
-    func deleteMix(_ mix: Mix, modelContext: ModelContext) async {
+    func deleteMix(_ mix: Mix, context: NSManagedObjectContext) {
         let mixId = mix.id
 
         // Remove from local array
         mixes.removeAll { $0.id == mixId }
 
-        // Delete from SwiftData + local files
-        if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
-            let fileManager = LocalFileManager.shared
-            let paths = [
-                local.localTtsAudioPath, local.localPhotoPath, local.localPhotoThumbnailPath,
-                local.localVideoPath, local.localVideoThumbnailPath, local.localImportMediaPath,
-                local.localImportThumbnailPath, local.localImportAudioPath, local.localEmbedOgImagePath,
-                local.localAudioPath, local.localScreenshotPath,
-            ]
-            for path in paths {
-                if let path { fileManager.deleteFile(at: path) }
-            }
-            modelContext.delete(local)
-        }
-        if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
-            for row in rows where row.mixId == mixId {
-                modelContext.delete(row)
-            }
-        }
-        try? modelContext.save()
-
-        // Fire-and-forget Supabase
-        let repo: MixRepository = resolve()
-        Task { try? await repo.deleteMix(id: mixId) }
+        // Delete from Core Data + local files
+        try? repo.deleteMix(id: mixId, context: context)
     }
 
     func toggleTag(_ tagId: UUID) {
@@ -268,9 +223,9 @@ final class HomeViewModel {
 
     // MARK: - Saved View Operations
 
-    func loadSavedViews() async {
+    func loadSavedViews(context: NSManagedObjectContext) {
         do {
-            savedViews = try await savedViewRepo.listSavedViews()
+            savedViews = try savedViewRepo.listSavedViews(context: context)
         } catch {}
     }
 
@@ -286,9 +241,9 @@ final class HomeViewModel {
         selectedTagOrder.removeAll()
     }
 
-    func deleteView(_ view: SavedView) async {
+    func deleteView(_ view: SavedView, context: NSManagedObjectContext) {
         do {
-            try await savedViewRepo.deleteSavedView(id: view.id)
+            try savedViewRepo.deleteSavedView(id: view.id, context: context)
             savedViews.removeAll { $0.id == view.id }
             if activeViewId == view.id {
                 deselectView()
@@ -296,33 +251,35 @@ final class HomeViewModel {
         } catch {}
     }
 
-    func saveCurrentAsView(name: String) async {
+    func saveCurrentAsView(name: String, context: NSManagedObjectContext) {
         do {
-            let created = try await savedViewRepo.createSavedView(
+            let created = try savedViewRepo.createSavedView(
                 name: name,
-                tagIds: Array(selectedTagIds)
+                tagIds: Array(selectedTagIds),
+                context: context
             )
-            await loadSavedViews()
+            loadSavedViews(context: context)
             activeViewId = created.id
         } catch {}
     }
 
-    func updateActiveView() async {
+    func updateActiveView(context: NSManagedObjectContext) {
         guard let viewId = activeViewId else { return }
         do {
-            _ = try await savedViewRepo.updateTagIds(
+            _ = try savedViewRepo.updateTagIds(
                 id: viewId,
-                tagIds: Array(selectedTagIds)
+                tagIds: Array(selectedTagIds),
+                context: context
             )
-            await loadSavedViews()
+            loadSavedViews(context: context)
         } catch {}
     }
 
-    func renameActiveView(name: String) async {
+    func renameActiveView(name: String, context: NSManagedObjectContext) {
         guard let viewId = activeViewId else { return }
         do {
-            _ = try await savedViewRepo.updateName(id: viewId, name: name)
-            await loadSavedViews()
+            _ = try savedViewRepo.updateName(id: viewId, name: name, context: context)
+            loadSavedViews(context: context)
         } catch {}
     }
 }

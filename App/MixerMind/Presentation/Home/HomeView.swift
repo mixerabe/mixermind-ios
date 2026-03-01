@@ -1,13 +1,12 @@
 import SwiftUI
 
 struct HomeView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.managedObjectContext) private var managedObjectContext
     @State private var viewModel = HomeViewModel()
     @State private var searchText = ""
     @State private var isSearchMode = false
     @FocusState private var isSearchFocused: Bool
     private let audioCoordinator: AudioPlaybackCoordinator = resolve()
-    var onDisconnect: () -> Void
 
     // Viewer overlay state
     @State private var viewerVM: MixViewModel?
@@ -18,6 +17,7 @@ struct HomeView: View {
     @State private var viewerDragScale: CGFloat = 1.0
     @State private var miniPlayerCorner: Corner = .bottomTrailing
     @State private var isExpandingFromMini = false
+    @State private var isOpeningFromCreator = false
     @State private var miniDragOffset: CGSize = .zero
 
     // Hero expand animation state
@@ -27,8 +27,12 @@ struct HomeView: View {
     @State private var heroFinished = false
 
 
-    // Creator sheet
+    // Creator parallax reveal: 0 = home visible, 1 = creator fully revealed
     @State private var showCreator = false
+    @State private var creatorProgress: CGFloat = 0
+    @State private var isCreatorDragging = false
+    @State private var creatorDragAxis: DragAxis? = nil
+    private enum DragAxis { case horizontal, vertical }
     // Card frame tracking for hero animations
     @State private var cardFrames: [UUID: CGRect] = [:]
     @State private var ignoreCardTaps = false
@@ -40,7 +44,7 @@ struct HomeView: View {
     private var currentMiniCardHeight: CGFloat {
         guard let vm = viewerVM else { return Self.miniCardWidth * (17.0 / 9.0) }
         let mix = vm.currentMix
-        let sy = max(mix.previewScaleY ?? 1.0, 1.2)
+        let sy = max(mix.previewCropScale ?? 1.0, 1.2)
         let aspectRatio = 390.0 / (844.0 / sy)
         return Self.miniCardWidth / aspectRatio
     }
@@ -58,23 +62,64 @@ struct HomeView: View {
         }
     }
 
+    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
     var body: some View {
+        let homeOffset = -creatorProgress * screenWidth
+        let creatorOffset = screenWidth * 0.5 * (1 - creatorProgress)
+
         ZStack {
+            // Layer 0: Creator (behind home) — parallax at half speed
+            if showCreator {
+                CreatorView(
+                    onDismiss: { dismissCreator() },
+                    onDone: { mix, creatorMedia in
+                        let vm = MixViewModel(editing: mix)
+                        vm.modelContext = managedObjectContext
+                        switch creatorMedia {
+                        case .photo(let data, let thumbnail):
+                            vm.editState.mediaData = data
+                            vm.editState.mediaThumbnail = thumbnail
+                            vm.editState.mediaIsVideo = false
+                        case .video(let data, let thumbnail):
+                            vm.editState.mediaData = data
+                            vm.editState.mediaThumbnail = thumbnail
+                            vm.editState.mediaIsVideo = true
+                        case .voiceRecording(let data):
+                            vm.editState.audioData = data
+                        case .file(let data, let fileName):
+                            vm.editState.fileData = data
+                            vm.editState.fileName = fileName
+                        case .importVideo(let data, let thumbnail, _, _):
+                            vm.editState.mediaData = data
+                            vm.editState.mediaThumbnail = thumbnail
+                            vm.editState.mediaIsVideo = mix.mediaIsVideo
+                        case nil:
+                            break
+                        }
+                        vm.editState.widgets = mix.widgets
+                        isOpeningFromCreator = true
+                        viewerVM = vm
+                        isViewerExpanded = true
+                        dismissCreator()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            isOpeningFromCreator = false
+                        }
+                    }
+                )
+                .offset(x: creatorOffset)
+                .simultaneousGesture(creatorDismissGesture)
+                .ignoresSafeArea()
+                .zIndex(1)
+            }
+
+            // Layer 1: Home content — slides right at full speed
             NavigationStack(path: $viewModel.navigationPath) {
                 mainContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { viewMenu }
-                    ToolbarItem(placement: .primaryAction) { settingsMenu }
-                }
-                .alert("Disconnect?", isPresented: $viewModel.showDisconnectAlert) {
-                    Button("Cancel", role: .cancel) {}
-                    Button("Disconnect", role: .destructive) {
-                        onDisconnect()
-                    }
-                } message: {
-                    Text("Your Supabase project will be disconnected and all local data cleared. You can reconnect anytime.")
                 }
                 .alert("Save as View", isPresented: $viewModel.showSaveViewAlert) {
                     TextField("View name", text: $viewModel.newViewName)
@@ -85,7 +130,7 @@ struct HomeView: View {
                         let name = viewModel.newViewName.trimmingCharacters(in: .whitespaces)
                         viewModel.newViewName = ""
                         guard !name.isEmpty else { return }
-                        Task { await viewModel.saveCurrentAsView(name: name) }
+                        viewModel.saveCurrentAsView(name: name, context: managedObjectContext)
                     }
                 }
                 .alert("Rename View", isPresented: $viewModel.showRenameViewAlert) {
@@ -97,39 +142,32 @@ struct HomeView: View {
                         let name = viewModel.renameViewName.trimmingCharacters(in: .whitespaces)
                         viewModel.renameViewName = ""
                         guard !name.isEmpty else { return }
-                        Task { await viewModel.renameActiveView(name: name) }
-                    }
-                }
-                .navigationDestination(for: HomeDestination.self) { dest in
-                    switch dest {
-                    case .createPhoto:
-                        CreatePhotoPage()
-                    case .createURLImport:
-                        CreateURLImportPage()
-                    case .createEmbed:
-                        CreateEmbedPage()
-                    case .createRecordAudio:
-                        CreateRecordAudioPage()
-                    case .createText:
-                        CreateTextPage()
+                        viewModel.renameActiveView(name: name, context: managedObjectContext)
                     }
                 }
                 .onChange(of: viewModel.navigationPath) { _, path in
                     if path.isEmpty {
-                        viewModel.reloadFromLocal(modelContext: modelContext)
+                        viewModel.reloadFromLocal(context: managedObjectContext)
                     }
                 }
-                .onReceive(NotificationCenter.default.publisher(for: .mixCreationStatusChanged)) { _ in
-                    viewModel.reloadFromLocal(modelContext: modelContext)
-                }
                 .task {
-                    await viewModel.loadMixes(modelContext: modelContext)
-                    viewModel.loadTags(modelContext: modelContext)
-                    await viewModel.loadSavedViews()
+                    await viewModel.loadMixes(context: managedObjectContext)
+                    viewModel.loadTags(context: managedObjectContext)
+                    viewModel.loadSavedViews(context: managedObjectContext)
                 }
-
-
+                .onReceive(NotificationCenter.default.publisher(for: MixCreationService.didFinishCreation)) { _ in
+                    viewModel.reloadFromLocal(context: managedObjectContext)
+                }
+                .onChange(of: viewerVM?.tagsForCurrentMix) { _, _ in
+                    if let vm = viewerVM {
+                        viewModel.syncFromViewer(vm.mixes, context: managedObjectContext)
+                    }
+                }
             }
+            .offset(x: homeOffset)
+            .simultaneousGesture(creatorOpenGesture)
+            .allowsHitTesting(creatorProgress == 0)
+            .zIndex(2)
 
             // Black backdrop — fully opaque when expanded, transparent when mini
             // Hidden during hero animation, shown instantly when hero finishes
@@ -149,7 +187,9 @@ struct HomeView: View {
                     screenshotURL: URL(string: url)!,
                     expanded: heroExpanded,
                     sourceFrame: heroSourceFrame,
-                    previewScaleY: heroMix.previewScaleY ?? 1.0
+                    cropX: heroMix.previewCropX ?? 0.5,
+                    cropY: heroMix.previewCropY ?? 0.5,
+                    cropScale: heroMix.previewCropScale ?? 1.0
                 )
                 .transition(.identity)
                 .ignoresSafeArea()
@@ -160,7 +200,7 @@ struct HomeView: View {
             if let vm = viewerVM {
                 let screen = UIScreen.main.bounds
                 let canvasW = screen.width
-                let canvasH = canvasW * (17.0 / 9.0)
+                let canvasH = screen.height
                 let safeTop = UIApplication.shared.connectedScenes
                     .compactMap { $0 as? UIWindowScene }
                     .first?.windows.first?.safeAreaInsets.top ?? 0
@@ -178,7 +218,7 @@ struct HomeView: View {
                 .frame(width: canvasW, height: canvasH)
                 .frame(height: isViewerExpanded ? nil : currentMiniCardHeight / Self.miniTargetScale)
                 .clipped()
-                .clipShape(.rect(cornerRadius: 16))
+                .clipShape(.rect(cornerRadius: isViewerExpanded ? 0 : 16))
                 .scaleEffect(isViewerExpanded ? viewerDragScale : Self.miniTargetScale)
                 .offset(isViewerExpanded ? viewerDragOffset : miniDragOffset)
                 .position(
@@ -197,7 +237,7 @@ struct HomeView: View {
                 .opacity(heroMix != nil && !heroFinished ? 0 : 1)
                 .ignoresSafeArea()
                 .transition(.asymmetric(
-                    insertion: (isExpandingFromMini || heroMix != nil) ? .identity : .move(edge: .trailing),
+                    insertion: (isExpandingFromMini || heroMix != nil || isOpeningFromCreator) ? .identity : .move(edge: .trailing),
                     removal: .identity
                 ))
                 .animation(.spring(duration: 0.35), value: isViewerExpanded)
@@ -218,46 +258,11 @@ struct HomeView: View {
                         .zIndex(12)
                 }
 
-                // Tag bar — independent floating layer above bottom safe area
-                if isViewerExpanded && viewerDragProgress == 0 {
-                    let safeBottom = UIApplication.shared.connectedScenes
-                        .compactMap { $0 as? UIWindowScene }
-                        .first?.windows.first?.safeAreaInsets.bottom ?? 0
-                    let tagBarY = screen.height - safeBottom - 22
-
-                    ViewerTagBar(viewModel: vm)
-                        .position(x: canvasW / 2, y: tagBarY)
-                        .ignoresSafeArea()
-                        .zIndex(11)
-                }
             }
+
         }
         .coordinateSpace(name: "home-root")
         .animation(.spring(duration: 0.35), value: isViewerExpanded)
-        .fullScreenCover(isPresented: $showCreator) {
-            CreatorView(
-                onDismiss: { showCreator = false },
-                onDone: { mix, creatorMedia in
-                    let vm = MixViewModel(editing: mix)
-                    switch creatorMedia {
-                    case .photo(let data, let thumbnail):
-                        vm.editState.photoData = data
-                        vm.editState.mediaThumbnail = thumbnail
-                    case .video(let data, let thumbnail):
-                        vm.editState.videoData = data
-                        vm.editState.mediaThumbnail = thumbnail
-                    case .audio(let data, let fileName):
-                        vm.editState.audioData = data
-                        vm.editState.audioFileName = fileName
-                    case nil:
-                        break
-                    }
-                    viewerVM = vm
-                    isViewerExpanded = true
-                    showCreator = false
-                }
-            )
-        }
     }
 
     // MARK: - Viewer Helpers
@@ -399,6 +404,7 @@ struct HomeView: View {
     private func performOpenViewer(mixes: [Mix], startIndex: Int) {
         miniPlayerCorner = .bottomTrailing
         let vm = MixViewModel(mixes: mixes, startIndex: startIndex)
+        vm.modelContext = managedObjectContext
         viewerVM = vm
         withAnimation(.spring(duration: 0.35)) { isViewerExpanded = true }
     }
@@ -424,6 +430,7 @@ struct HomeView: View {
         // 2. Create viewer VM now so it has time to render while hero animates.
         //    It's hidden behind the hero (zIndex 15 > 10).
         let vm = MixViewModel(mixes: mixes, startIndex: startIndex)
+        vm.modelContext = managedObjectContext
         viewerVM = vm
         isViewerExpanded = true
 
@@ -449,6 +456,85 @@ struct HomeView: View {
         withTransaction(transaction) {
             viewerVM = nil
             isViewerExpanded = false
+        }
+    }
+
+    private var creatorOpenGesture: some Gesture {
+        DragGesture(minimumDistance: 15)
+            .onChanged { value in
+                // Lock axis on first significant movement
+                if creatorDragAxis == nil {
+                    let absX = abs(value.translation.width)
+                    let absY = abs(value.translation.height)
+                    if absX > 10 || absY > 10 {
+                        creatorDragAxis = absX > absY ? .horizontal : .vertical
+                    }
+                }
+                guard creatorDragAxis == .horizontal else { return }
+                let dx = max(0, -value.translation.width)
+                if !showCreator { showCreator = true }
+                isCreatorDragging = true
+                creatorProgress = min(1, dx / screenWidth)
+            }
+            .onEnded { value in
+                defer { creatorDragAxis = nil }
+                guard isCreatorDragging else { return }
+                isCreatorDragging = false
+                let dx = max(0, -value.translation.width)
+                if dx > screenWidth * 0.3 || -value.predictedEndTranslation.width > screenWidth * 0.5 {
+                    withAnimation(.spring(duration: 0.35)) {
+                        creatorProgress = 1
+                    }
+                } else {
+                    dismissCreator()
+                }
+            }
+    }
+
+    private var creatorDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 15)
+            .onChanged { value in
+                // Lock axis on first significant movement
+                if creatorDragAxis == nil {
+                    let absX = abs(value.translation.width)
+                    let absY = abs(value.translation.height)
+                    if absX > 10 || absY > 10 {
+                        creatorDragAxis = absX > absY ? .horizontal : .vertical
+                    }
+                }
+                guard creatorDragAxis == .horizontal else { return }
+                let dx = max(0, value.translation.width)
+                isCreatorDragging = true
+                creatorProgress = max(0, 1 - dx / screenWidth)
+            }
+            .onEnded { value in
+                defer { creatorDragAxis = nil }
+                guard isCreatorDragging else { return }
+                isCreatorDragging = false
+                let dx = max(0, value.translation.width)
+                if dx > screenWidth * 0.3 || value.predictedEndTranslation.width > screenWidth * 0.5 {
+                    dismissCreator()
+                } else {
+                    withAnimation(.spring(duration: 0.3)) {
+                        creatorProgress = 1
+                    }
+                }
+            }
+    }
+
+    private func openCreator() {
+        showCreator = true
+        withAnimation(.spring(duration: 0.45)) {
+            creatorProgress = 1
+        }
+    }
+
+    private func dismissCreator() {
+        withAnimation(.spring(duration: 0.35)) {
+            creatorProgress = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            showCreator = false
         }
     }
 
@@ -508,7 +594,16 @@ extension HomeView {
         ScrollView {
             MasonryLayout(columns: 2, spacing: 8) {
                 ForEach(viewModel.displayedMixes) { mix in
-                    MasonryMixCard(mix: mix)
+                    MasonryMixCard(mix: mix) {
+                        guard !ignoreCardTaps else { return }
+                        let mixes = viewModel.displayedMixes
+                        guard let index = mixes.firstIndex(where: { $0.id == mix.id }) else { return }
+                        if mix.screenshotUrl != nil {
+                            openViewerWithHero(mix: mix, frame: cardFrames[mix.id] ?? .zero, mixes: mixes, startIndex: index)
+                        } else {
+                            openViewer(mixes: mixes, startIndex: index)
+                        }
+                    }
                         .background {
                             GeometryReader { geo in
                                 Color.clear.onChange(of: geo.frame(in: .named("home-root"))) { _, frame in
@@ -518,35 +613,9 @@ extension HomeView {
                                 }
                             }
                         }
-                        .contentShape(.rect)
-                        .onTapGesture {
-                            guard !ignoreCardTaps else { return }
-                            if mix.creationStatus == "creating" { return }
-                            if mix.creationStatus == "failed" { return }
-                            let mixes = viewModel.displayedMixes.filter { $0.creationStatus == nil }
-                            guard let index = mixes.firstIndex(where: { $0.id == mix.id }) else { return }
-                            if mix.screenshotUrl != nil {
-                                openViewerWithHero(mix: mix, frame: cardFrames[mix.id] ?? .zero, mixes: mixes, startIndex: index)
-                            } else {
-                                openViewer(mixes: mixes, startIndex: index)
-                            }
-                        }
                         .contextMenu {
-                            if mix.creationStatus == "failed" {
-                                Button {
-                                    let service: MixCreationService = resolve()
-                                    service.retry(mixId: mix.id, modelContext: modelContext)
-                                } label: {
-                                    Label("Retry", systemImage: "arrow.clockwise")
-                                }
-                            }
                             Button(role: .destructive) {
-                                if mix.creationStatus != nil {
-                                    let service: MixCreationService = resolve()
-                                    service.discard(mixId: mix.id, modelContext: modelContext)
-                                } else {
-                                    Task { await viewModel.deleteMix(mix, modelContext: modelContext) }
-                                }
+                                viewModel.deleteMix(mix, context: managedObjectContext)
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -554,11 +623,6 @@ extension HomeView {
                 }
             }
             .padding(.horizontal, 8)
-        }
-        .refreshable {
-            await viewModel.loadMixes(modelContext: modelContext)
-            viewModel.loadTags(modelContext: modelContext)
-            await viewModel.loadSavedViews()
         }
     }
 
@@ -574,7 +638,16 @@ extension HomeView {
                 let searchMixes = viewModel.searchMixes
                 MasonryLayout(columns: 2, spacing: 8) {
                     ForEach(searchMixes) { mix in
-                        MasonryMixCard(mix: mix)
+                        MasonryMixCard(mix: mix) {
+                            guard !ignoreCardTaps else { return }
+                            if let fullIndex = viewModel.mixes.firstIndex(where: { $0.id == mix.id }) {
+                                if mix.screenshotUrl != nil {
+                                    openViewerWithHero(mix: mix, frame: cardFrames[mix.id] ?? .zero, mixes: viewModel.mixes, startIndex: fullIndex)
+                                } else {
+                                    openViewer(mixes: viewModel.mixes, startIndex: fullIndex)
+                                }
+                            }
+                        }
                             .background {
                                 GeometryReader { geo in
                                     Color.clear.onChange(of: geo.frame(in: .named("home-root"))) { _, frame in
@@ -584,20 +657,9 @@ extension HomeView {
                                     }
                                 }
                             }
-                            .contentShape(.rect)
-                            .onTapGesture {
-                                guard !ignoreCardTaps else { return }
-                                if let fullIndex = viewModel.mixes.firstIndex(where: { $0.id == mix.id }) {
-                                    if mix.screenshotUrl != nil {
-                                        openViewerWithHero(mix: mix, frame: cardFrames[mix.id] ?? .zero, mixes: viewModel.mixes, startIndex: fullIndex)
-                                    } else {
-                                        openViewer(mixes: viewModel.mixes, startIndex: fullIndex)
-                                    }
-                                }
-                            }
                             .contextMenu {
                                 Button(role: .destructive) {
-                                    Task { await viewModel.deleteMix(mix, modelContext: modelContext) }
+                                    viewModel.deleteMix(mix, context: managedObjectContext)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -617,11 +679,7 @@ extension HomeView {
     private var syncStatusText: some View {
         switch viewModel.syncEngine.syncStatus {
         case .syncing:
-            Text("Syncing...")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .downloading(let current, let total):
-            Text("Downloading \(current)/\(total)")
+            Text("Loading...")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .failed(let message):
@@ -672,7 +730,7 @@ extension HomeView {
 
             if viewModel.hasViewDrifted {
                 Button {
-                    Task { await viewModel.updateActiveView() }
+                    viewModel.updateActiveView(context: managedObjectContext)
                 } label: {
                     Label("Update View", systemImage: "arrow.triangle.2.circlepath")
                 }
@@ -687,7 +745,7 @@ extension HomeView {
                 }
                 Button(role: .destructive) {
                     if let view = viewModel.activeView {
-                        Task { await viewModel.deleteView(view) }
+                        viewModel.deleteView(view, context: managedObjectContext)
                     }
                 } label: {
                     Label("Delete View", systemImage: "trash")
@@ -706,16 +764,6 @@ extension HomeView {
         }
     }
 
-    private var settingsMenu: some View {
-        Menu {
-            Button("Disconnect", role: .destructive) {
-                viewModel.showDisconnectAlert = true
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .fontWeight(.semibold)
-        }
-    }
 }
 
 // MARK: - Bottom Bar
@@ -746,10 +794,10 @@ extension HomeView {
                         if !newValue.isEmpty {
                             isSearchMode = true
                         }
-                        viewModel.search(query: newValue, modelContext: modelContext)
+                        viewModel.search(query: newValue, context: managedObjectContext)
                     }
                     .onSubmit {
-                        viewModel.search(query: searchText, modelContext: modelContext)
+                        viewModel.search(query: searchText, context: managedObjectContext)
                     }
 
                 Button(action: clearSearchText) {
@@ -780,45 +828,15 @@ extension HomeView {
                 .opacity(isSearchMode ? 1 : 0)
                 .allowsHitTesting(isSearchMode)
 
-                HStack(spacing: 8) {
-                    // New creator flow
-                    Button { showCreator = true } label: {
-                        Image(systemName: "plus")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 52, height: 52)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(in: .circle)
-
-                    // Legacy create menu
-                    Menu {
-                        Button { viewModel.navigationPath.append(.createPhoto) } label: {
-                            Label("Gallery", systemImage: "photo.on.rectangle")
-                        }
-                        Button { viewModel.navigationPath.append(.createURLImport) } label: {
-                            Label("Import", systemImage: "play.rectangle")
-                        }
-                        Button { viewModel.navigationPath.append(.createEmbed) } label: {
-                            Label("Embed", systemImage: "link.badge.plus")
-                        }
-                        Button { viewModel.navigationPath.append(.createRecordAudio) } label: {
-                            Label("Record", systemImage: "mic")
-                        }
-                        Button { viewModel.navigationPath.append(.createText) } label: {
-                            Label("Text", systemImage: "textformat")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 52, height: 52)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(in: .circle)
+                Button { openCreator() } label: {
+                    Image(systemName: "plus")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 52, height: 52)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .glassEffect(in: .circle)
                 .opacity(isSearchMode ? 0 : 1)
                 .allowsHitTesting(!isSearchMode)
             }

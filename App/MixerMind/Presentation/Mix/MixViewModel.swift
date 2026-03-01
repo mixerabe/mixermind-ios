@@ -1,5 +1,5 @@
 import SwiftUI
-import SwiftData
+import CoreData
 import AVFoundation
 import UIKit
 
@@ -9,25 +9,24 @@ final class MixViewModel {
     enum Mode { case view, edit }
 
     struct EditState {
-        var ttsAudioData: Data?
-        var ttsAudioFileURL: URL?
-        var isGeneratingTTS = false
-        var ttsError: String?
+        var audioData: Data?
+        var audioFileURL: URL?
+        var isGeneratingAudio = false
+        var audioError: String?
         var selectedTagIds: Set<UUID> = []
         var embedOgImageData: Data?
-        // Photo/video media carried from CreatorView
-        var photoData: Data?
-        var videoData: Data?
+        // Media (photo or video) carried from CreatorView
+        var mediaData: Data?
         var mediaThumbnail: UIImage?
+        var mediaIsVideo: Bool = false
         var isLoadingMedia = false
-        // Audio recording carried from CreatorView
-        var audioData: Data?
-        var audioFileName: String?
         // Audio chip state
         var audioRemoved = false
-        var aiSummaryAudioData: Data?
-        var aiSummaryAudioFileURL: URL?
-        var isGeneratingAISummary = false
+        // File
+        var fileData: Data?
+        var fileName: String?
+        // Widgets
+        var widgets: [MixWidget] = []
     }
 
     let mode: Mode
@@ -70,7 +69,7 @@ final class MixViewModel {
         }
     }
 
-    /// Edit mode — editing a single unpublished mix
+    /// Edit mode — editing a single unsaved mix
     init(editing mix: Mix) {
         self.mode = .edit
         self.mixes = [mix]
@@ -99,15 +98,10 @@ final class MixViewModel {
 
     func onDisappear() {
         stopVideoPlayback()
-        // Clean up temp files in edit mode
         if mode == .edit {
-            if let url = editState.ttsAudioFileURL {
+            if let url = editState.audioFileURL {
                 try? FileManager.default.removeItem(at: url)
-                editState.ttsAudioFileURL = nil
-            }
-            if let url = editState.aiSummaryAudioFileURL {
-                try? FileManager.default.removeItem(at: url)
-                editState.aiSummaryAudioFileURL = nil
+                editState.audioFileURL = nil
             }
         }
     }
@@ -136,17 +130,17 @@ final class MixViewModel {
         loadTagsForCurrentMix()
 
         switch mix.type {
-        case .video:
-            if let urlString = mix.videoUrl, let url = URL(string: urlString) {
+        case .media:
+            if mix.mediaIsVideo, let urlString = mix.mediaUrl, let url = URL(string: urlString) {
                 startVideoPlayback(url: url)
             }
 
-        case .import:
-            if let urlString = mix.importMediaUrl, let url = URL(string: urlString) {
+        case .`import`:
+            if mix.mediaIsVideo, let urlString = mix.mediaUrl, let url = URL(string: urlString) {
                 startVideoPlayback(url: url)
             }
 
-        case .audio, .text, .photo, .embed:
+        case .note, .voice, .canvas:
             break
         }
     }
@@ -254,8 +248,6 @@ final class MixViewModel {
 
     // MARK: - Coordinator Sync
 
-    /// Called when coordinator's currentTrackIndex changes externally (lock screen, track finish).
-    /// Scrolls the viewer to match and loads video.
     func syncFromCoordinator() {
         guard !isDeleting,
               let track = coordinator.currentTrack,
@@ -273,7 +265,6 @@ final class MixViewModel {
         }
     }
 
-    /// Lightweight sync — updates activeID and tags only, no video. Safe to call while minimized.
     func syncActiveTrack() {
         guard let track = coordinator.currentTrack,
               let mixId = UUID(uuidString: track.id),
@@ -299,14 +290,12 @@ final class MixViewModel {
 
     // MARK: - Tags
 
-    private let tagRepo: TagRepository = resolve()
-    var modelContext: ModelContext?
+    var modelContext: NSManagedObjectContext?
 
     func loadTagsForCurrentMix() {
         tagsForCurrentMix = currentMix.tags
     }
 
-    /// Selected tags first, then the rest alphabetically
     var sortedTags: [Tag] {
         let selectedIds = Set(tagsForCurrentMix.map(\.id))
         let selected = allTags.filter { selectedIds.contains($0.id) }
@@ -317,14 +306,14 @@ final class MixViewModel {
     func loadAllTags() {
         guard let modelContext else { return }
         do {
-            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
+            let request = NSFetchRequest<LocalTag>(entityName: "LocalTag")
+            let localTags = try modelContext.fetch(request)
             allTags = localTags.map { $0.toTag() }
         } catch {}
     }
 
     func toggleTag(_ tag: Tag) {
         if mode == .edit {
-            // Edit mode: toggle in editState only (no SwiftData/Supabase)
             let isOn = editState.selectedTagIds.contains(tag.id)
             if isOn {
                 editState.selectedTagIds.remove(tag.id)
@@ -339,30 +328,27 @@ final class MixViewModel {
             return
         }
 
-        // View mode: persist to SwiftData + Supabase
         guard let modelContext else { return }
         let mixId = currentMix.id
         let isOn = tagsForCurrentMix.contains { $0.id == tag.id }
 
         if isOn {
             tagsForCurrentMix.removeAll { $0.id == tag.id }
-            if let row = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()).first(where: {
-                $0.mixId == mixId && $0.tagId == tag.id
-            }) {
+            let request = NSFetchRequest<LocalMixTag>(entityName: "LocalMixTag")
+            request.predicate = NSPredicate(format: "mixId == %@ AND tagId == %@", mixId as CVarArg, tag.id as CVarArg)
+            request.fetchLimit = 1
+            if let row = try? modelContext.fetch(request).first {
                 modelContext.delete(row)
             }
         } else {
             tagsForCurrentMix.append(tag)
-            modelContext.insert(LocalMixTag(mixId: mixId, tagId: tag.id))
+            _ = LocalMixTag(mixId: mixId, tagId: tag.id, context: modelContext)
         }
 
         if let i = mixes.firstIndex(where: { $0.id == mixId }) {
             mixes[i].tags = tagsForCurrentMix
         }
         try? modelContext.save()
-
-        let newIds = Set(tagsForCurrentMix.map(\.id))
-        Task { try? await tagRepo.setTagsForMix(mixId: mixId, tagIds: newIds) }
     }
 
     func createAndAddTag(name: String) {
@@ -371,52 +357,26 @@ final class MixViewModel {
         let now = Date()
         let tag = Tag(id: tagId, name: name, createdAt: now)
 
-        // Tags are global entities — always persist to SwiftData + Supabase
-        modelContext.insert(LocalTag(tagId: tagId, name: name, createdAt: now))
+        _ = LocalTag(tagId: tagId, name: name, createdAt: now, context: modelContext)
         try? modelContext.save()
 
         allTags.append(tag)
         allTags.sort { $0.name < $1.name }
-        toggleTag(tag) // Delegates to mode-aware toggleTag
-
-        // Fire-and-forget Supabase call
-        Task {
-            if let remoteTag = try? await tagRepo.createTag(name: name) {
-                if remoteTag.id != tagId {
-                    await MainActor.run {
-                        if let local = try? modelContext.fetch(FetchDescriptor<LocalTag>()).first(where: { $0.tagId == tagId }) {
-                            local.tagId = remoteTag.id
-                        }
-                        // Only update LocalMixTag references in view mode
-                        if self.mode == .view {
-                            if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
-                                for row in rows where row.tagId == tagId {
-                                    row.tagId = remoteTag.id
-                                }
-                            }
-                        }
-                        // Update editState reference if in edit mode
-                        if self.mode == .edit && self.editState.selectedTagIds.contains(tagId) {
-                            self.editState.selectedTagIds.remove(tagId)
-                            self.editState.selectedTagIds.insert(remoteTag.id)
-                        }
-                        try? modelContext.save()
-                    }
-                }
-            }
-        }
+        toggleTag(tag)
     }
 
-    /// Reload tags from local SwiftData
     func reloadTagsFromLocal() {
         guard let modelContext else { return }
         let mixId = currentMix.id
         do {
-            let localTags = try modelContext.fetch(FetchDescriptor<LocalTag>())
+            let tagRequest = NSFetchRequest<LocalTag>(entityName: "LocalTag")
+            let localTags = try modelContext.fetch(tagRequest)
             allTags = localTags.map { $0.toTag() }
 
-            let localMixTags = try modelContext.fetch(FetchDescriptor<LocalMixTag>())
-            let tagIdsForMix = Set(localMixTags.filter { $0.mixId == mixId }.map(\.tagId))
+            let mixTagRequest = NSFetchRequest<LocalMixTag>(entityName: "LocalMixTag")
+            mixTagRequest.predicate = NSPredicate(format: "mixId == %@", mixId as CVarArg)
+            let localMixTags = try modelContext.fetch(mixTagRequest)
+            let tagIdsForMix = Set(localMixTags.map(\.tagId))
             let tags = allTags.filter { tagIdsForMix.contains($0.id) }
 
             if let i = mixes.firstIndex(where: { $0.id == mixId }) {
@@ -430,75 +390,48 @@ final class MixViewModel {
 
     // MARK: - Title
 
-    private let repo: MixRepository = resolve()
+    var titleDraft = ""
+
+    func beginTitleEdit() {
+        titleDraft = currentMix.title ?? ""
+    }
+
+    func commitTitle() {
+        let text = titleDraft
+        Task { await saveTitle(text) }
+    }
 
     func saveTitle(_ text: String) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let title: String? = trimmed.isEmpty ? nil : trimmed
         let mixId = currentMix.id
 
-        if mode == .edit {
-            // Edit mode: local-only update (not persisted yet)
-            if let index = mixes.firstIndex(where: { $0.id == mixId }) {
-                mixes[index] = reconstructMix(mixes[index], title: title)
-            }
-            return true
+        if let index = mixes.firstIndex(where: { $0.id == mixId }) {
+            mixes[index].title = title
         }
 
-        // View mode: persist to SwiftData + Supabase
+        if mode == .edit { return true }
+
         if let modelContext {
-            if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
+            let request = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+            request.predicate = NSPredicate(format: "mixId == %@", mixId as CVarArg)
+            request.fetchLimit = 1
+            if let local = try? modelContext.fetch(request).first {
                 local.title = title
                 try? modelContext.save()
             }
         }
-        if let index = mixes.firstIndex(where: { $0.id == mixId }) {
-            mixes[index] = reconstructMix(mixes[index], title: title)
-        }
-
-        Task { _ = try? await repo.updateTitle(id: mixId, title: title) }
         return true
-    }
-
-    /// Reconstruct a mix with a new title, preserving all other fields.
-    private func reconstructMix(_ mix: Mix, title: String?) -> Mix {
-        Mix(
-            id: mix.id,
-            type: mix.type,
-            createdAt: mix.createdAt,
-            title: title,
-            tags: mix.tags,
-            textContent: mix.textContent,
-            ttsAudioUrl: mix.ttsAudioUrl,
-            photoUrl: mix.photoUrl,
-            photoThumbnailUrl: mix.photoThumbnailUrl,
-            videoUrl: mix.videoUrl,
-            videoThumbnailUrl: mix.videoThumbnailUrl,
-            importSourceUrl: mix.importSourceUrl,
-            importMediaUrl: mix.importMediaUrl,
-            importThumbnailUrl: mix.importThumbnailUrl,
-            importAudioUrl: mix.importAudioUrl,
-            embedUrl: mix.embedUrl,
-            embedOg: mix.embedOg,
-            audioUrl: mix.audioUrl,
-            screenshotUrl: mix.screenshotUrl,
-            previewScaleY: mix.previewScaleY,
-            gradientTop: mix.gradientTop,
-            gradientBottom: mix.gradientBottom
-        )
     }
 
     // MARK: - Delete
 
-    /// Deletes the current mix. Returns `true` if the viewer still has mixes to show,
-    /// `false` if it was the last one (caller should dismiss).
     func deleteCurrentMix() async -> Bool {
         isDeleting = true
 
         let mixId = currentMix.id
         let currentIndex = mixes.firstIndex(where: { $0.id == mixId }) ?? 0
 
-        // 1. Figure out which mix to land on before removing
         let nextId: UUID? = {
             if mixes.count <= 1 { return nil }
             if currentIndex + 1 < mixes.count {
@@ -507,200 +440,175 @@ final class MixViewModel {
             return mixes[currentIndex - 1].id
         }()
 
-        // 2. Scroll to the neighbor first (animated)
         if let nextId {
             stopVideoPlayback()
             activeID = nextId
             videoProgress = 0
-            // Reset scroll position so the binding recognizes the new target
-            // (after a previous delete, scrolledID may already equal the current position)
             scrolledID = nil
             withAnimation(.spring(duration: 0.35)) {
                 scrolledID = nextId
             }
         }
 
-        // 3. Wait for scroll animation, then remove the deleted mix from the array
         try? await Task.sleep(for: .milliseconds(nextId != nil ? 400 : 0))
 
         mixes.removeAll { $0.id == mixId }
 
-        // 4. Load the new current mix (video, tags)
         if nextId != nil {
             coordinator.loadQueue(mixes, startingAt: activeID)
             loadCurrentMix()
         }
 
-        // 5. Keep flag true until SwiftUI layout settles after array mutation
         try? await Task.sleep(for: .milliseconds(300))
         isDeleting = false
 
-        // 5. Delete from local storage
         if let modelContext {
-            if let local = try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId }) {
-                let fileManager = LocalFileManager.shared
-                let paths = [
-                    local.localTtsAudioPath, local.localPhotoPath, local.localPhotoThumbnailPath,
-                    local.localVideoPath, local.localVideoThumbnailPath, local.localImportMediaPath,
-                    local.localImportThumbnailPath, local.localImportAudioPath, local.localEmbedOgImagePath,
-                    local.localAudioPath, local.localScreenshotPath,
-                ]
-                for path in paths {
-                    if let path { fileManager.deleteFile(at: path) }
-                }
-                modelContext.delete(local)
-            }
-            if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
-                for row in rows where row.mixId == mixId {
-                    modelContext.delete(row)
-                }
-            }
-            try? modelContext.save()
+            let repo: MixRepository = resolve()
+            try? repo.deleteMix(id: mixId, context: modelContext)
         }
-
-        // 6. Fire-and-forget Supabase call
-        Task { try? await repo.deleteMix(id: mixId) }
 
         return !mixes.isEmpty
     }
 
-    // MARK: - Edit Mode: TTS Preview
+    // MARK: - Edit Mode: Audio Preview
 
     func generateTTS() {
-        guard mode == .edit, let text = currentMix.textContent, !text.isEmpty else { return }
+        guard mode == .edit, currentMix.type == .note, let text = currentMix.textContent, !text.isEmpty else { return }
 
-        editState.isGeneratingTTS = true
-        editState.ttsError = nil
+        editState.isGeneratingAudio = true
+        editState.audioError = nil
 
         Task {
             do {
                 let data = try await TextToSpeechService.synthesize(text: text)
-                editState.ttsAudioData = data
+                editState.audioData = data
 
-                // Write to temp file
                 let tempDir = FileManager.default.temporaryDirectory
                 let tempFile = tempDir.appendingPathComponent("tts_preview_\(UUID().uuidString).mp3")
                 try data.write(to: tempFile)
-                editState.ttsAudioFileURL = tempFile
+                editState.audioFileURL = tempFile
 
-                // Update mix with the temp file URL so coordinator can play it
                 let mix = currentMix
                 if let i = mixes.firstIndex(where: { $0.id == mix.id }) {
-                    mixes[i] = Mix(
-                        id: mix.id, type: mix.type, createdAt: mix.createdAt,
-                        title: mix.title, tags: mix.tags,
-                        textContent: mix.textContent,
-                        ttsAudioUrl: tempFile.absoluteString,
-                        gradientTop: mix.gradientTop,
-                        gradientBottom: mix.gradientBottom
-                    )
+                    mixes[i].audioUrl = tempFile.absoluteString
                 }
 
-                // Load and play via coordinator
                 coordinator.loadQueue(mixes, startingAt: activeID)
                 coordinator.play()
 
-                editState.isGeneratingTTS = false
+                editState.isGeneratingAudio = false
             } catch {
-                editState.ttsError = error.localizedDescription
-                editState.isGeneratingTTS = false
+                editState.audioError = error.localizedDescription
+                editState.isGeneratingAudio = false
             }
         }
     }
 
-    var hasTTSPreview: Bool { editState.ttsAudioFileURL != nil }
+    var hasAudioPreview: Bool { editState.audioFileURL != nil }
 
     // MARK: - Audio Chip (Editor)
-
-    /// Whether the current import is audio-only (no video track).
-    var isAudioOnlyImport: Bool {
-        let mix = currentMix
-        guard mix.type == .import else { return false }
-        // Audio-only imports have importAudioUrl but no importMediaUrl
-        if mode == .edit {
-            return editState.audioData != nil && editState.videoData == nil
-        }
-        return mix.importAudioUrl != nil && mix.importMediaUrl == nil
-    }
 
     var editChipLabel: String {
         let mix = currentMix
         switch mix.type {
-        case .text:
-            return hasTTSPreview ? "AI Transcribe" : "Add audio"
-        case .photo:
-            return editState.aiSummaryAudioFileURL != nil ? "AI Summary" : "Add audio"
-        case .video:
-            return editState.audioRemoved ? "No audio" : "Video audio"
-        case .import:
-            if isAudioOnlyImport { return "Original audio" }
-            return editState.audioRemoved ? "No audio" : "Video audio"
-        case .audio:
+        case .note:
+            return "Add audio"
+        case .media:
+            if mix.mediaIsVideo {
+                return editState.audioRemoved ? "No audio" : "Video audio"
+            }
+            return hasAudioPreview ? "AI Summary" : "Add audio"
+        case .voice:
             return "Original audio"
-        case .embed:
-            return editState.aiSummaryAudioFileURL != nil ? "AI Summary" : "Add audio"
+        case .canvas:
+            // Check for file widget with audio/video extension
+            if let fw = mix.fileWidget {
+                let ext = ((fw.fileName ?? "") as NSString).pathExtension.lowercased()
+                let audioExts = Set(["mp3", "m4a", "wav", "aac", "flac", "ogg"])
+                let videoExts = Set(["mp4", "mov", "m4v"])
+                if audioExts.contains(ext) || videoExts.contains(ext) {
+                    return "File audio"
+                }
+            }
+            return hasAudioPreview ? "AI Summary" : "Add audio"
+        case .`import`:
+            if mix.mediaIsVideo {
+                return editState.audioRemoved ? "No audio" : "Video audio"
+            }
+            return "Original audio"
         }
     }
 
     var editChipIcon: String {
         let mix = currentMix
         switch mix.type {
-        case .text:
-            return hasTTSPreview ? "waveform.circle.fill" : "waveform.circle"
-        case .photo, .embed:
-            return editState.aiSummaryAudioFileURL != nil ? "waveform.circle.fill" : "waveform.circle"
-        case .video, .import:
-            if isAudioOnlyImport { return "waveform.circle.fill" }
-            return editState.audioRemoved ? "speaker.slash" : "speaker.wave.2.fill"
-        case .audio:
+        case .note:
+            return hasAudioPreview ? "waveform.circle.fill" : "waveform.circle"
+        case .media:
+            if mix.mediaIsVideo {
+                return editState.audioRemoved ? "speaker.slash" : "speaker.wave.2.fill"
+            }
+            return hasAudioPreview ? "waveform.circle.fill" : "waveform.circle"
+        case .voice:
+            return "waveform.circle.fill"
+        case .canvas:
+            return hasAudioPreview ? "waveform.circle.fill" : "waveform.circle"
+        case .`import`:
+            if mix.mediaIsVideo {
+                return editState.audioRemoved ? "speaker.slash" : "speaker.wave.2.fill"
+            }
             return "waveform.circle.fill"
         }
     }
 
-    /// Whether tapping the chip triggers audio generation (TTS or AI Summary).
     var chipHasGenerateAction: Bool {
         let mix = currentMix
         switch mix.type {
-        case .text:
-            return !hasTTSPreview
-        case .photo, .embed:
-            return editState.aiSummaryAudioFileURL == nil
-        default:
+        case .note:
+            return !hasAudioPreview
+        case .media:
+            if mix.mediaIsVideo { return false }
+            return !hasAudioPreview
+        case .canvas:
+            return !hasAudioPreview
+        case .voice, .`import`:
             return false
         }
     }
 
-    /// Whether the chip should offer a "Remove audio" option.
     var canRemoveAudio: Bool {
         let mix = currentMix
         switch mix.type {
-        case .text:
-            return hasTTSPreview
-        case .photo, .embed:
-            return editState.aiSummaryAudioFileURL != nil
-        case .video:
-            return !editState.audioRemoved
-        case .import:
-            if isAudioOnlyImport { return false }
-            return !editState.audioRemoved
-        case .audio:
+        case .note:
+            return hasAudioPreview
+        case .media:
+            if mix.mediaIsVideo {
+                return !editState.audioRemoved
+            }
+            return hasAudioPreview
+        case .canvas:
+            return hasAudioPreview
+        case .voice:
+            return false
+        case .`import`:
+            if mix.mediaIsVideo {
+                return !editState.audioRemoved
+            }
             return false
         }
     }
 
-    /// Viewer chip label — nil means don't show the chip.
     var viewerChipLabel: String? {
         let mix = currentMix
         switch mix.type {
-        case .text:
-            return mix.ttsAudioUrl != nil ? "AI Transcribe" : nil
-        case .video:
-            // audioUrl being silence-generated would be marked via lack of real audio
-            return mix.audioUrl == nil ? "No audio" : nil
-        case .import:
-            if isAudioOnlyImport { return nil }
-            return mix.importAudioUrl == nil ? "No audio" : nil
-        default:
+        case .note:
+            return nil
+        case .media:
+            if mix.mediaIsVideo {
+                return mix.audioUrl == nil ? "No audio" : nil
+            }
+            return nil
+        case .voice, .canvas, .`import`:
             return nil
         }
     }
@@ -708,15 +616,13 @@ final class MixViewModel {
     var viewerChipIcon: String? {
         guard let label = viewerChipLabel else { return nil }
         switch label {
-        case "AI Transcribe": return "waveform.circle.fill"
         case "No audio": return "speaker.slash"
         default: return "waveform.circle"
         }
     }
 
-    /// Whether the chip is in a loading state.
     var chipIsLoading: Bool {
-        editState.isGeneratingTTS || editState.isGeneratingAISummary
+        editState.isGeneratingAudio
     }
 
     // MARK: - Audio Chip Actions
@@ -724,65 +630,62 @@ final class MixViewModel {
     func removeAudio() {
         let mix = currentMix
         switch mix.type {
-        case .text:
-            // Remove TTS preview
-            if let url = editState.ttsAudioFileURL {
+        case .note, .canvas:
+            if let url = editState.audioFileURL {
                 try? FileManager.default.removeItem(at: url)
             }
-            editState.ttsAudioData = nil
-            editState.ttsAudioFileURL = nil
-            // Revert mix ttsAudioUrl
+            editState.audioData = nil
+            editState.audioFileURL = nil
             if let i = mixes.firstIndex(where: { $0.id == mix.id }) {
-                mixes[i] = reconstructMix(mixes[i], audioUrl: nil)
+                mixes[i].audioUrl = nil
             }
             coordinator.stop()
 
-        case .photo, .embed:
-            // Remove AI Summary
-            if let url = editState.aiSummaryAudioFileURL {
-                try? FileManager.default.removeItem(at: url)
+        case .media, .`import`:
+            if mix.mediaIsVideo {
+                editState.audioRemoved = true
+                generateLocalSilenceForVideo()
+            } else {
+                if let url = editState.audioFileURL {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                editState.audioData = nil
+                editState.audioFileURL = nil
+                if let i = mixes.firstIndex(where: { $0.id == mix.id }) {
+                    mixes[i].audioUrl = nil
+                }
+                coordinator.stop()
             }
-            editState.aiSummaryAudioData = nil
-            editState.aiSummaryAudioFileURL = nil
-            coordinator.stop()
 
-        case .video, .import:
-            guard !isAudioOnlyImport else { return }
-            editState.audioRemoved = true
-            // Generate local silence so coordinator can still time playback
-            generateLocalSilenceForVideo()
-
-        case .audio:
+        case .voice:
             break
         }
     }
 
     func generateAISummary() {
         guard mode == .edit else { return }
-        editState.isGeneratingAISummary = true
+        editState.isGeneratingAudio = true
 
         Task {
             do {
-                // Placeholder: 5s silence
                 let silenceData = try generateSilence(duration: 5.0)
-                editState.aiSummaryAudioData = silenceData
+                editState.audioData = silenceData
 
                 let tempFile = FileManager.default.temporaryDirectory
                     .appendingPathComponent("ai_summary_\(UUID().uuidString).m4a")
                 try silenceData.write(to: tempFile)
-                editState.aiSummaryAudioFileURL = tempFile
+                editState.audioFileURL = tempFile
 
-                // Load into coordinator for preview playback
                 let mix = currentMix
                 if let i = mixes.firstIndex(where: { $0.id == mix.id }) {
-                    mixes[i] = reconstructMix(mixes[i], audioUrl: tempFile.absoluteString)
+                    mixes[i].audioUrl = tempFile.absoluteString
                 }
                 coordinator.loadQueue(mixes, startingAt: activeID)
                 coordinator.play()
 
-                editState.isGeneratingAISummary = false
+                editState.isGeneratingAudio = false
             } catch {
-                editState.isGeneratingAISummary = false
+                editState.isGeneratingAudio = false
             }
         }
     }
@@ -791,7 +694,7 @@ final class MixViewModel {
         Task {
             do {
                 let mix = currentMix
-                let videoData: Data? = editState.videoData
+                let videoData: Data? = editState.mediaData
                 guard let videoData else { return }
 
                 let duration = try await Self.videoDuration(from: videoData)
@@ -801,9 +704,8 @@ final class MixViewModel {
                     .appendingPathComponent("silence_\(UUID().uuidString).m4a")
                 try silenceData.write(to: tempFile)
 
-                // Update mix so coordinator uses silence for timing
                 if let i = mixes.firstIndex(where: { $0.id == mix.id }) {
-                    mixes[i] = reconstructMix(mixes[i], audioUrl: tempFile.absoluteString)
+                    mixes[i].audioUrl = tempFile.absoluteString
                 }
                 coordinator.loadQueue(mixes, startingAt: activeID)
                 if coordinator.isPlaying {
@@ -854,53 +756,22 @@ final class MixViewModel {
         return duration.seconds
     }
 
-    /// Reconstruct a mix with a new audio URL, preserving all other fields.
-    private func reconstructMix(_ mix: Mix, audioUrl: String?) -> Mix {
-        Mix(
-            id: mix.id,
-            type: mix.type,
-            createdAt: mix.createdAt,
-            title: mix.title,
-            tags: mix.tags,
-            textContent: mix.textContent,
-            ttsAudioUrl: mix.type == .text ? audioUrl : mix.ttsAudioUrl,
-            photoUrl: mix.photoUrl,
-            photoThumbnailUrl: mix.photoThumbnailUrl,
-            videoUrl: mix.videoUrl,
-            videoThumbnailUrl: mix.videoThumbnailUrl,
-            importSourceUrl: mix.importSourceUrl,
-            importMediaUrl: mix.importMediaUrl,
-            importThumbnailUrl: mix.importThumbnailUrl,
-            importAudioUrl: mix.type == .import ? audioUrl : mix.importAudioUrl,
-            embedUrl: mix.embedUrl,
-            embedOg: mix.embedOg,
-            audioUrl: (mix.type != .text && mix.type != .import) ? audioUrl : mix.audioUrl,
-            screenshotUrl: mix.screenshotUrl,
-            previewScaleY: mix.previewScaleY,
-            gradientTop: mix.gradientTop,
-            gradientBottom: mix.gradientBottom
-        )
-    }
-
-    /// Download embed OG image for screenshot capture during publish.
+    /// Download embed OG image for screenshot capture during save.
     private func downloadEmbedOgImageIfNeeded() {
-        guard currentMix.type == .embed,
-              let imageUrlStr = currentMix.embedOg?.imageUrl,
+        guard let imageUrlStr = currentMix.embedOg?.imageUrl,
               let imageUrl = URL(string: imageUrlStr) else { return }
 
         Task {
             do {
                 let (data, _) = try await URLSession.shared.data(from: imageUrl)
                 editState.embedOgImageData = data
-            } catch {
-                // Image download failed — continue without image
-            }
+            } catch {}
         }
     }
 
-    // MARK: - Edit Mode: Publish
+    // MARK: - Edit Mode: Save
 
-    func publishMix() -> Bool {
+    func saveMix() -> Bool {
         guard mode == .edit, let modelContext else { return false }
 
         let mix = currentMix
@@ -908,7 +779,6 @@ final class MixViewModel {
         let mixId = mix.id
         let mixDir = mixId.uuidString
 
-        // Ensure mix directory exists
         let dirURL = localFileManager.fileURL(for: mixDir)
         try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
 
@@ -919,7 +789,9 @@ final class MixViewModel {
             do { try data.write(to: url); return path } catch { return nil }
         }
 
-        // Build request
+        // Collect widgets from editState or mix
+        let widgets = editState.widgets.isEmpty ? mix.widgets : editState.widgets
+
         var request = MixCreationRequest(
             mixId: mixId,
             mixType: mix.type,
@@ -927,75 +799,109 @@ final class MixViewModel {
             textContent: mix.textContent,
             title: mix.title,
             selectedTagIds: Array(editState.selectedTagIds),
-            embedUrl: mix.type == .embed ? mix.embedUrl : nil,
-            isAudioFromTTS: mix.type == .text,
-            audioRemoved: editState.audioRemoved
+            embedUrl: mix.embedUrl,
+            audioRemoved: editState.audioRemoved,
+            mediaIsVideo: mix.mediaIsVideo,
+            widgets: widgets
         )
 
-        // Prepare media
         var media = MixCreationMedia()
 
         switch mix.type {
-        case .photo:
-            if let photoData = editState.photoData {
-                media.photoData = photoData
-                let thumbData = editState.mediaThumbnail.flatMap { $0.jpegData(compressionQuality: 0.7) }
-                media.photoThumbnailData = thumbData
-                request.rawPhotoPath = writeSmall(photoData, name: "photo.jpg")
-                request.rawPhotoThumbnailPath = writeSmall(thumbData, name: "photo_thumb.jpg")
+        case .media:
+            if mix.mediaIsVideo {
+                if let videoData = editState.mediaData {
+                    media.mediaData = videoData
+                    media.mediaIsVideo = true
+                    let thumbData = editState.mediaThumbnail.flatMap { $0.jpegData(compressionQuality: 0.7) }
+                    media.mediaThumbnailData = thumbData
+                    request.rawMediaPath = writeSmall(videoData, name: "media.mp4")
+                    request.rawMediaThumbnailPath = writeSmall(thumbData, name: "media_thumb.jpg")
+                }
+            } else {
+                if let photoData = editState.mediaData {
+                    media.mediaData = photoData
+                    let thumbData = editState.mediaThumbnail.flatMap { $0.jpegData(compressionQuality: 0.7) }
+                    media.mediaThumbnailData = thumbData
+                    request.rawMediaPath = writeSmall(photoData, name: "media.jpg")
+                    request.rawMediaThumbnailPath = writeSmall(thumbData, name: "media_thumb.jpg")
+                }
             }
-            // AI Summary audio for photo
-            if let aiAudioData = editState.aiSummaryAudioData {
-                request.rawAudioPath = writeSmall(aiAudioData, name: "ai_summary.m4a")
+            if let audioData = editState.audioData {
+                media.audioData = audioData
+                request.rawAudioPath = writeSmall(audioData, name: "audio.m4a")
             }
-        case .video:
-            if let videoData = editState.videoData {
-                media.videoData = videoData
-                let thumbData = editState.mediaThumbnail.flatMap { $0.jpegData(compressionQuality: 0.7) }
-                media.videoThumbnailData = thumbData
-                request.rawVideoPath = writeSmall(videoData, name: "video.mp4")
-                request.rawVideoThumbnailPath = writeSmall(thumbData, name: "video_thumb.jpg")
+
+        case .voice:
+            if let audioData = editState.audioData {
+                media.audioData = audioData
+                request.rawAudioPath = writeSmall(audioData, name: "voice.m4a")
             }
-        case .import:
-            // Video already written to a file:// URL in mix.importMediaUrl by CreatorView
-            if let importVideoData = editState.videoData {
-                media.importMediaData = importVideoData
-                let thumbData = editState.mediaThumbnail.flatMap { $0.jpegData(compressionQuality: 0.7) }
-                media.importThumbnailData = thumbData
-                request.rawImportMediaPath = writeSmall(importVideoData, name: "import_video.mp4")
-                request.rawImportThumbnailPath = writeSmall(thumbData, name: "import_thumb.jpg")
-            }
-            request.importSourceUrl = mix.importSourceUrl
-        case .embed:
+
+        case .canvas:
+            // Handle embed widget OG image
             if let ogImageData = editState.embedOgImageData {
                 media.embedOgImageData = ogImageData
                 request.rawEmbedOgImagePath = writeSmall(ogImageData, name: "embed_og.jpg")
             }
-            // AI Summary audio for embed
-            if let aiAudioData = editState.aiSummaryAudioData {
-                request.rawAudioPath = writeSmall(aiAudioData, name: "ai_summary.m4a")
+            // Handle file widget data
+            if let fileData = editState.fileData {
+                media.fileData = fileData
+                media.fileName = editState.fileName
+                request.fileName = editState.fileName
+                let ext = ((editState.fileName ?? "") as NSString).pathExtension
+                let name = ext.isEmpty ? "raw_file" : "raw_file.\(ext)"
+                request.rawFilePath = writeSmall(fileData, name: name)
             }
-        case .audio:
             if let audioData = editState.audioData {
                 media.audioData = audioData
-                request.audioFileName = editState.audioFileName
                 request.rawAudioPath = writeSmall(audioData, name: "audio.m4a")
             }
-        case .text:
-            break
+
+        case .note:
+            if let audioData = editState.audioData {
+                media.audioData = audioData
+                request.rawAudioPath = writeSmall(audioData, name: "audio.mp3")
+            }
+
+        case .`import`:
+            if mix.mediaIsVideo {
+                // Video import — same as .media video
+                if let videoData = editState.mediaData {
+                    media.mediaData = videoData
+                    media.mediaIsVideo = true
+                    let thumbData = editState.mediaThumbnail.flatMap { $0.jpegData(compressionQuality: 0.7) }
+                    media.mediaThumbnailData = thumbData
+                    request.rawMediaPath = writeSmall(videoData, name: "media.mp4")
+                    request.rawMediaThumbnailPath = writeSmall(thumbData, name: "media_thumb.jpg")
+                }
+            } else {
+                // Audio-only import — write raw MP4 for audio extraction
+                if let videoData = editState.mediaData {
+                    media.mediaData = videoData
+                    request.rawMediaPath = writeSmall(videoData, name: "raw_import.mp4")
+                }
+            }
+            if let audioData = editState.audioData {
+                media.audioData = audioData
+                request.rawAudioPath = writeSmall(audioData, name: "audio.m4a")
+            }
+            request.sourceUrl = mix.sourceUrl
         }
 
-        // Encode OG metadata for embed type (moved out of earlier block)
-        if mix.type == .embed, let og = mix.embedOg {
+        // Encode embed OG for storage
+        if let og = mix.embedOg {
             request.embedOgJson = try? JSONEncoder().encode(og)
         }
 
-        // Screenshot
         let embedImage: UIImage? = editState.embedOgImageData.flatMap { UIImage(data: $0) }
         let thumbnail = editState.mediaThumbnail
 
-        // Extract gradients from thumbnail (photo/video) or screenshot (text/embed)
-        if let thumb = thumbnail {
+        // Determine text bucket for note mixes
+        let textBucket: ScreenshotService.TextBucket? = (mix.type == .note) ? .current : nil
+
+        // Skip gradient extraction for media/import — use solid black
+        if mix.type != .media && mix.type != .import, let thumb = thumbnail {
             let (top, bottom) = ScreenshotService.extractGradients(from: thumb)
             request.gradientTop = top
             request.gradientBottom = bottom
@@ -1005,48 +911,43 @@ final class MixViewModel {
             mixType: mix.type,
             textContent: mix.textContent ?? "",
             mediaThumbnail: thumbnail,
-            embedUrl: mix.embedUrl,
-            embedOg: mix.embedOg,
+            widgets: widgets,
             embedImage: embedImage,
             gradientTop: request.gradientTop ?? mix.gradientTop,
-            gradientBottom: request.gradientBottom ?? mix.gradientBottom
+            gradientBottom: request.gradientBottom ?? mix.gradientBottom,
+            textBucket: textBucket
         ) {
             let jpegData = screenshot.jpegData(compressionQuality: 0.85)
             request.screenshotPath = writeSmall(jpegData, name: "screenshot.jpg")
 
-            if thumbnail == nil {
+            if thumbnail == nil, mix.type != .media, mix.type != .import {
                 let (top, bottom) = ScreenshotService.extractGradients(from: screenshot)
                 request.gradientTop = top
                 request.gradientBottom = bottom
             }
 
-            request.previewScaleY = ScreenshotService.computeScaleY(
+            let crop = ScreenshotService.computeCrop(
                 mixType: mix.type,
                 textContent: mix.textContent ?? "",
                 mediaThumbnail: thumbnail,
-                importHasVideo: false,
+                widgets: widgets,
                 embedImage: embedImage,
-                embedUrl: mix.embedUrl,
-                embedOg: mix.embedOg
+                textBucket: textBucket
             )
+            request.previewCropX = crop.cropX
+            request.previewCropY = crop.cropY
+            request.previewCropScale = crop.cropScale
         }
 
-        // Enqueue — creates LocalMix with "creating" status immediately
+        request.screenshotBucket = textBucket?.rawValue
+
         let creationService: MixCreationService = resolve()
-        creationService.enqueue(request: request, media: media, modelContext: modelContext)
+        creationService.create(request: request, media: media, context: modelContext)
 
-        // Notify home grid to reload and show the new "creating" card
-        NotificationCenter.default.post(name: .mixCreationStatusChanged, object: nil)
-
-        // Clean up coordinator + temp files
         coordinator.stop()
-        if let url = editState.ttsAudioFileURL {
+        if let url = editState.audioFileURL {
             try? FileManager.default.removeItem(at: url)
-            editState.ttsAudioFileURL = nil
-        }
-        if let url = editState.aiSummaryAudioFileURL {
-            try? FileManager.default.removeItem(at: url)
-            editState.aiSummaryAudioFileURL = nil
+            editState.audioFileURL = nil
         }
 
         return true

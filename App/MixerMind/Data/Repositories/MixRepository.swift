@@ -1,106 +1,90 @@
 import Foundation
-import Supabase
+import CoreData
 
 final class MixRepository {
-    private var client: SupabaseClient {
-        guard let client = SupabaseManager.shared.client else {
-            fatalError("SupabaseManager not configured. Call configure() first.")
-        }
-        return client
-    }
-
-    /// All columns except `content_tsv` and `content_embedding` (pgvector search-only).
-    private static let mixColumns = """
-        id, type, created_at, title, \
-        text_content, tts_audio_url, \
-        photo_url, photo_thumbnail_url, \
-        video_url, video_thumbnail_url, \
-        import_source_url, import_media_url, import_thumbnail_url, import_audio_url, \
-        embed_url, embed_og, \
-        audio_url, content, \
-        screenshot_url, preview_scale_y, \
-        gradient_top, gradient_bottom
-        """
 
     // MARK: - CRUD
 
-    func listMixes() async throws -> [Mix] {
-        try await client.from("mixes")
-            .select(Self.mixColumns)
-            .order("created_at", ascending: false)
-            .execute()
-            .value
+    func listMixes(context: NSManagedObjectContext) throws -> [Mix] {
+        let request = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \LocalMix.createdAt, ascending: false)]
+        return try context.fetch(request).map { $0.toMix() }
     }
 
-    func getMix(id: UUID) async throws -> Mix {
-        try await client.from("mixes")
-            .select(Self.mixColumns)
-            .eq("id", value: id)
-            .single()
-            .execute()
-            .value
-    }
+    /// Fetches mixes with tags pre-populated via a single pass over mix-tag rows.
+    func listMixesWithTags(context: NSManagedObjectContext) throws -> [Mix] {
+        let mixRequest = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+        mixRequest.sortDescriptors = [NSSortDescriptor(keyPath: \LocalMix.createdAt, ascending: false)]
+        let localMixes = try context.fetch(mixRequest)
 
-    func createMix(_ payload: CreateMixPayload) async throws -> Mix {
-        try await client.from("mixes")
-            .insert(payload)
-            .select(Self.mixColumns)
-            .single()
-            .execute()
-            .value
-    }
+        let tagRequest = NSFetchRequest<LocalTag>(entityName: "LocalTag")
+        let localTags = try context.fetch(tagRequest)
+        let tagLookup = Dictionary(uniqueKeysWithValues: localTags.map { ($0.tagId, $0.toTag()) })
 
-    func updateMix(id: UUID, _ payload: UpdateMixPayload) async throws -> Mix {
-        try await client.from("mixes")
-            .update(payload)
-            .eq("id", value: id)
-            .select(Self.mixColumns)
-            .single()
-            .execute()
-            .value
-    }
-
-    private struct TitleUpdate: Encodable {
-        let title: String?
-
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(title, forKey: .title)
+        let mixTagRequest = NSFetchRequest<LocalMixTag>(entityName: "LocalMixTag")
+        let localMixTags = try context.fetch(mixTagRequest)
+        var tagMap: [UUID: [Tag]] = [:]
+        for row in localMixTags {
+            if let tag = tagLookup[row.tagId] {
+                tagMap[row.mixId, default: []].append(tag)
+            }
         }
 
-        enum CodingKeys: String, CodingKey { case title }
+        return localMixes.map { local in
+            local.toMix(tags: tagMap[local.mixId] ?? [])
+        }
     }
 
-    func updateTitle(id: UUID, title: String?) async throws -> Mix {
-        try await client.from("mixes")
-            .update(TitleUpdate(title: title))
-            .eq("id", value: id)
-            .select(Self.mixColumns)
-            .single()
-            .execute()
-            .value
+    func getMix(id: UUID, context: NSManagedObjectContext) throws -> Mix? {
+        let request = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+        request.predicate = NSPredicate(format: "mixId == %@", id as CVarArg)
+        request.fetchLimit = 1
+        return try context.fetch(request).first?.toMix()
     }
 
-    func deleteMix(id: UUID) async throws {
-        try await client.from("mixes")
-            .delete()
-            .eq("id", value: id)
-            .execute()
+    func updateTitle(id: UUID, title: String?, context: NSManagedObjectContext) throws {
+        let request = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+        request.predicate = NSPredicate(format: "mixId == %@", id as CVarArg)
+        request.fetchLimit = 1
+        if let local = try context.fetch(request).first {
+            local.title = title
+            try context.save()
+        }
     }
 
-    // MARK: - Storage
+    func deleteMix(id: UUID, context: NSManagedObjectContext) throws {
+        let fileManager = LocalFileManager.shared
 
-    func uploadMedia(data: Data, fileName: String, contentType: String) async throws -> String {
-        let path = "\(UUID().uuidString)/\(fileName)"
+        let mixRequest = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+        mixRequest.predicate = NSPredicate(format: "mixId == %@", id as CVarArg)
+        mixRequest.fetchLimit = 1
+        if let local = try context.fetch(mixRequest).first {
+            // Delete local files
+            let paths = [
+                local.localMediaPath, local.localMediaThumbnailPath,
+                local.localEmbedOgImagePath, local.localAudioPath,
+                local.localScreenshotPath,
+            ]
+            for path in paths {
+                if let path { fileManager.deleteFile(at: path) }
+            }
 
-        try await client.storage
-            .from("mix-media")
-            .upload(path, data: data, options: .init(contentType: contentType))
+            // Delete the mix directory
+            let dirURL = fileManager.fileURL(for: id.uuidString)
+            try? FileManager.default.removeItem(at: dirURL)
 
-        let publicURL = try client.storage
-            .from("mix-media")
-            .getPublicURL(path: path)
+            context.delete(local)
+        }
 
-        return publicURL.absoluteString
+        // Delete associated mix-tag rows
+        let tagRequest = NSFetchRequest<LocalMixTag>(entityName: "LocalMixTag")
+        tagRequest.predicate = NSPredicate(format: "mixId == %@", id as CVarArg)
+        if let rows = try? context.fetch(tagRequest) {
+            for row in rows {
+                context.delete(row)
+            }
+        }
+
+        try context.save()
     }
 }

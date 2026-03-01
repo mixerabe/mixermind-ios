@@ -9,25 +9,25 @@ struct MixCreationRequest: Codable {
     var selectedTagIds: [UUID] = []
     var embedUrl: String?
     var embedOgJson: Data?           // Encoded OGMetadata
-    var importSourceUrl: String?
-    var isAudioFromTTS: Bool = false
     var audioRemoved: Bool = false
-    var audioFileName: String?
+    var mediaIsVideo: Bool = false
+    var fileName: String?
+    var widgets: [MixWidget]?
+    var sourceUrl: String?
 
     // Local file paths (relative to MixMedia/) for raw media saved in Phase 1
-    var rawPhotoPath: String?
-    var rawVideoPath: String?
+    var rawMediaPath: String?
+    var rawMediaThumbnailPath: String?
     var rawAudioPath: String?
-    var rawImportMediaPath: String?
-    var rawImportAudioPath: String?
-    var rawPhotoThumbnailPath: String?
-    var rawVideoThumbnailPath: String?
-    var rawImportThumbnailPath: String?
     var rawEmbedOgImagePath: String?
+    var rawFilePath: String?
 
     // Screenshot (captured in Phase 1, already on disk)
+    var screenshotBucket: String?
     var screenshotPath: String?
-    var previewScaleY: Double?
+    var previewCropX: Double?
+    var previewCropY: Double?
+    var previewCropScale: Double?
     var gradientTop: String?
     var gradientBottom: String?
 }

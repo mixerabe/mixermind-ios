@@ -1,5 +1,5 @@
 import SwiftUI
-import SwiftData
+import CoreData
 import AVFoundation
 
 struct MixView: View {
@@ -12,15 +12,13 @@ struct MixView: View {
     var safeAreaTop: CGFloat = 0
     var miniVisibleHeight: CGFloat = 0
 
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.managedObjectContext) private var managedObjectContext
 
     private let coordinator: AudioPlaybackCoordinator = resolve()
 
     @State private var showDeleteAlert = false
-
-    // Title editing
-    @State private var titleDraft = ""
-    @State private var isEditingTitle = false
+    @State private var showBottomSheet = true
+    @State private var sheetDetent: PresentationDetent = .height(MixBottomSheetParams.smallDetentHeight)
 
 
 
@@ -28,24 +26,39 @@ struct MixView: View {
         max(1 - dragProgress * 3, 0) // Fades out quickly in first third of drag
     }
 
-    /// Canvas dimensions: full width, 16:9 aspect
+    private var safeAreaBottom: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.bottom ?? 0
+    }
+
+    /// Canvas dimensions: 9:21 aspect ratio, width = screen width
     private var canvasSize: CGSize {
         let w = UIScreen.main.bounds.width
-        let h = w * (17.0 / 9.0)
-        return CGSize(width: w, height: h)
+        return CGSize(width: w, height: w / ScreenshotService.canvasAspect)
     }
 
     var body: some View {
         ZStack {
+            // Full-bleed background matching current mix
+            Group {
+                if viewModel.currentMix.type == .media || viewModel.currentMix.type == .import {
+                    Color.black
+                } else {
+                    LinearGradient(
+                        colors: [
+                            Color(hex: viewModel.currentMix.gradientTop ?? "#1a1a2e"),
+                            Color(hex: viewModel.currentMix.gradientBottom ?? "#16213e")
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+            }
+            .ignoresSafeArea()
+
             pagingCanvas
                 .frame(width: canvasSize.width, height: canvasSize.height)
-                .background(Color.clear)
-                .allowsHitTesting(!isMinimized)
-
-            // Top chrome — positioned below safe area
-            topChrome
-                .position(x: canvasSize.width / 2, y: safeAreaTop + 36)
-                .opacity(chromeOpacity)
                 .allowsHitTesting(!isMinimized)
 
             // Mini controls — big buttons that scale down naturally with the viewer (view mode only)
@@ -62,27 +75,47 @@ struct MixView: View {
                     HStack {
                         audioChipView
                             .padding(.leading, 24)
-                            .padding(.bottom, 32)
+                            .padding(.bottom, 80)
                         Spacer()
                     }
                 }
-                .frame(width: canvasSize.width, height: canvasSize.height)
+                .frame(width: canvasSize.width, height: UIScreen.main.bounds.height)
                 .opacity(chromeOpacity)
                 .allowsHitTesting(!isMinimized)
             }
+
+            // Source link bar for .import type
+            if viewModel.currentMix.type == .import,
+               let sourceUrl = viewModel.currentMix.sourceUrl,
+               let url = URL(string: sourceUrl),
+               !isMinimized {
+                VStack {
+                    Spacer()
+                    sourceLinkBar(url: url)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, safeAreaBottom + 72)
+                }
+                .frame(width: canvasSize.width, height: UIScreen.main.bounds.height)
+                .opacity(chromeOpacity)
+                .allowsHitTesting(!isMinimized)
+            }
+
         }
-        .sheet(isPresented: $isEditingTitle) {
-            TitleEditSheet(
-                title: $titleDraft,
-                onDone: commitTitle,
-                onCancel: cancelTitleEdit
+        .sheet(isPresented: $showBottomSheet) {
+            MixBottomSheet(
+                viewModel: viewModel,
+                sheetDetent: $sheetDetent,
+                onDismiss: onDismiss,
+                onDelete: { showDeleteAlert = true }
             )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.hidden)
+            .presentationDetents(MixBottomSheetParams.allDetents, selection: $sheetDetent)
+            .presentationDragIndicator(.visible)
+            .presentationCompactAdaptation(.none)
             .interactiveDismissDisabled()
+            .presentationBackgroundInteraction(.enabled)
         }
         .onAppear {
-            viewModel.modelContext = modelContext
+            viewModel.modelContext = managedObjectContext
             if !viewModel.hasAppeared {
                 viewModel.onAppear()
                 viewModel.loadAllTags()
@@ -212,71 +245,11 @@ struct MixView: View {
         .contentShape(.rect)
     }
 
-    // MARK: - Top Chrome (replaces toolbar)
-
-    private var topChrome: some View {
-        HStack {
-            // Left slot
-            if viewModel.mode == .edit {
-                Button { onDismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(in: .circle)
-            } else if !viewModel.mixes.isEmpty {
-                viewModeMenu
-            } else {
-                Color.clear.frame(width: 44, height: 44)
-            }
-
-            Spacer()
-
-            // Center: title chip
-            if !viewModel.mixes.isEmpty {
-                titleBar
-            }
-
-            Spacer()
-
-            // Right slot
-            if viewModel.mode == .edit {
-                Button {
-                    if viewModel.publishMix() {
-                        onDismiss()
-                    }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(in: .circle)
-            } else {
-                Button { onDismiss() } label: {
-                    Image(systemName: "xmark")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(in: .circle)
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(width: canvasSize.width)
-    }
 
     // MARK: - Audio Chip
 
     private var showAudioChip: Bool {
-        if viewModel.mode == .edit { return true }
+        if viewModel.mode == .edit { return viewModel.editChipLabel != "Add audio" }
         return viewModel.viewerChipLabel != nil
     }
 
@@ -294,7 +267,7 @@ struct MixView: View {
             if viewModel.chipHasGenerateAction {
                 // Tappable: generates TTS or AI Summary
                 Button {
-                    if viewModel.currentMix.type == .text {
+                    if viewModel.currentMix.type == .note {
                         viewModel.generateTTS()
                     } else {
                         viewModel.generateAISummary()
@@ -360,33 +333,6 @@ struct MixView: View {
         .glassEffect(in: .capsule)
     }
 
-    // MARK: - View Mode Menu
-
-    private var viewModeMenu: some View {
-        Menu {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    viewModel.isAutoScroll.toggle()
-                }
-            } label: {
-                Label(
-                    viewModel.isAutoScroll ? "Stop Auto-scroll" : "Auto-scroll",
-                    systemImage: viewModel.isAutoScroll ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
-                )
-            }
-            Button("Delete", role: .destructive) {
-                showDeleteAlert = true
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .glassEffect(in: .circle)
-    }
 
 
     // MARK: - Canvas per Mix
@@ -397,23 +343,30 @@ struct MixView: View {
 
         let mediaUrl: String? = {
             switch mix.type {
-            case .photo: return mix.photoUrl
-            case .video: return mix.videoUrl
-            case .import: return mix.importMediaUrl
+            case .media, .`import`: return mix.mediaUrl
             default: return nil
             }
         }()
 
         let thumbnailUrl: String? = {
             switch mix.type {
-            case .photo: return mix.photoThumbnailUrl ?? mix.photoUrl
-            case .video: return mix.videoThumbnailUrl
-            case .import: return mix.importThumbnailUrl
+            case .media, .`import`: return mix.mediaThumbnailUrl ?? mix.mediaUrl
             default: return nil
             }
         }()
 
         let editThumbnail: UIImage? = (viewModel.mode == .edit && isCurrent) ? viewModel.editState.mediaThumbnail : nil
+
+        // Compute fixed note container width from stored bucket (or legacy fallback)
+        let noteContainerWidth: CGFloat? = {
+            guard mix.type == .note else { return nil }
+            let screenWidth = UIScreen.main.bounds.width
+            if let bucket = mix.textBucket {
+                return min(bucket.containerWidth, screenWidth - 48)
+            }
+            // Legacy mixes (no bucket stored) — use 342pt (matches old 390pt screenshots)
+            return min(342, screenWidth - 48)
+        }()
 
         return MixCanvasView(
             mixType: mix.type,
@@ -422,10 +375,10 @@ struct MixView: View {
             mediaUrl: mediaUrl,
             thumbnailUrl: thumbnailUrl,
             videoPlayer: isCurrent ? viewModel.videoPlayer : nil,
-            embedUrl: mix.embedUrl,
-            embedOg: mix.embedOg,
+            widgets: mix.widgets,
             gradientTop: mix.gradientTop,
             gradientBottom: mix.gradientBottom,
+            noteContainerWidth: noteContainerWidth,
             onEmbedTap: {
                 if let embedUrl = mix.embedUrl, let url = URL(string: embedUrl) {
                     UIApplication.shared.open(url)
@@ -468,139 +421,346 @@ struct MixView: View {
                 }
             },
             onPlaceholderTap: nil,
+            isEditing: viewModel.mode == .edit,
             isMinimized: isMinimized,
             dragProgress: dragProgress
         )
     }
 
-    // MARK: - Title Bar (toolbar chip only -- never contains a text field)
-
-    private var titleBar: some View {
+    private func sourceLinkBar(url: URL) -> some View {
         Button {
-            beginTitleEdit()
+            UIApplication.shared.open(url)
         } label: {
-            Text(viewModel.currentMix.title ?? "Add title")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(viewModel.currentMix.title != nil ? .white : .white.opacity(0.4))
-                .lineLimit(1)
-                .padding(.horizontal, 16)
-                .frame(height: 44)
-                .contentShape(.capsule)
+            HStack(spacing: 8) {
+                let host = url.host ?? ""
+                let isInstagram = host.contains("instagram")
+                Image(systemName: isInstagram ? "camera.circle.fill" : "play.rectangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(isInstagram ? .pink : .red)
+                Text(host)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Image(systemName: "arrow.up.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 40)
+            .glassEffect(in: .capsule)
         }
         .buttonStyle(.plain)
-        .glassEffect(in: .capsule)
     }
 
-    private func beginTitleEdit() {
-        titleDraft = viewModel.currentMix.title ?? ""
-        isEditingTitle = true
-    }
-
-    private func commitTitle() {
-        let text = titleDraft
-        isEditingTitle = false
-        Task { await viewModel.saveTitle(text) }
-    }
-
-    private func cancelTitleEdit() {
-        isEditingTitle = false
-    }
 }
 
-private struct TitleEditSheet: View {
-    @Binding var title: String
-    var onDone: () -> Void
-    var onCancel: () -> Void
+// MARK: - Bottom Sheet Params
 
-    @FocusState private var isFocused: Bool
+private struct MixBottomSheetParams {
+    static let smallDetentHeight: CGFloat = 65
+    static let allDetents: Set<PresentationDetent> = [.height(smallDetentHeight), .large]
+}
+
+// MARK: - Expandable Bottom Sheet
+
+private struct MixBottomSheet: View {
+    @Bindable var viewModel: MixViewModel
+    @Binding var sheetDetent: PresentationDetent
+    var onDismiss: () -> Void
+    var onDelete: () -> Void
+
+    @State private var showNewTagSheet = false
+    @State private var isTitleFocused = false
+
+    private var isExpanded: Bool {
+        sheetDetent == .large
+    }
 
     var body: some View {
-        NavigationStack {
-            VStack {
-                Spacer()
-                TextField("Add title", text: $title)
-                    .focused($isFocused)
-                    .textFieldStyle(.plain)
-                    .font(.title2.weight(.medium))
-                    .multilineTextAlignment(.center)
-                    .submitLabel(.done)
-                    .onSubmit { onDone() }
-                    .onChange(of: title) { _, newValue in
-                        if newValue.count > 50 {
-                            title = String(newValue.prefix(50))
-                        }
-                    }
-                    .padding(.horizontal, 32)
-                Spacer()
+        ZStack(alignment: .top) {
+            // Collapsed
+            if !isExpanded {
+                collapsedContent
+                    .padding(.horizontal, 12.5)
+                    .transition(.opacity)
             }
-            .navigationTitle("Title")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button { onCancel() } label: {
-                            Image(systemName: "xmark")
-                                .fontWeight(.semibold)
+
+            // Expanded
+            if isExpanded {
+                VStack(spacing: 0) {
+                    expandedTitleRow
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            tagGrid
                         }
+                        .padding(.horizontal, 16)
                     }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button { onDone() } label: {
-                            Image(systemName: "checkmark")
-                                .fontWeight(.semibold)
-                        }
+                    .scrollIndicators(.hidden)
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isExpanded)
+        .sheet(isPresented: $showNewTagSheet) {
+            NewTagSheet { name in
+                viewModel.createAndAddTag(name: name)
+            }
+            .presentationDetents([.height(140)])
+            .presentationDragIndicator(.hidden)
+        }
+        .onChange(of: sheetDetent) { _, newDetent in
+            if newDetent == .height(MixBottomSheetParams.smallDetentHeight) {
+                isTitleFocused = false
+                viewModel.commitTitle()
+            } else if newDetent == .large {
+                viewModel.beginTitleEdit()
+            }
+        }
+    }
+
+    // MARK: - Collapsed Content (small detent)
+
+    private var collapsedContent: some View {
+        HStack {
+            // Left button
+            Button { onDismiss() } label: {
+                Image(systemName: viewModel.mode == .edit ? "arrow.left" : "xmark")
+                    .foregroundStyle(.white)
+                    .font(.body.weight(.semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive())
+
+            Spacer()
+
+            // Center — title + tag preview
+            VStack(spacing: 1) {
+                Text(viewModel.currentMix.title ?? "Untitled Mix")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(viewModel.currentMix.title != nil ? .white : .white.opacity(0.5))
+                    .lineLimit(1)
+
+                tagPreviewLine
+            }
+            .frame(height: 40)
+
+            Spacer()
+
+            // Right button
+            if viewModel.mode == .edit {
+                Button {
+                    if viewModel.saveMix() { onDismiss() }
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(Color.accentColor).interactive())
+            } else {
+                viewModeMenu
+            }
+        }
+    }
+
+    // MARK: - Tag Preview Line
+
+    private var tagPreviewLine: some View {
+        let activeTags = viewModel.tagsForCurrentMix
+        let maxVisible = 3
+
+        return Group {
+            if activeTags.isEmpty {
+                Text(viewModel.mode == .edit ? "Add tags" : "Add tags")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.35))
+            } else {
+                let visible = activeTags.prefix(maxVisible)
+                let overflow = activeTags.count - maxVisible
+                HStack(spacing: 4) {
+                    Text(visible.map { "#\($0.name)" }.joined(separator: ", "))
+                        .lineLimit(1)
+                    if overflow > 0 {
+                        Text("+\(overflow)")
+                            .foregroundStyle(.white.opacity(0.4))
                     }
                 }
-        }
-        .onAppear {
-            isFocused = true
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.6))
+            }
         }
     }
-}
 
-struct ViewerTagBar: View {
-    @Bindable var viewModel: MixViewModel
-    @State private var showNewTagSheet = false
+    // MARK: - Expanded Title Row (large detent)
 
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(viewModel.sortedTags) { tag in
-                    let isOn = viewModel.tagsForCurrentMix.contains { $0.id == tag.id }
+    private var expandedTitleRow: some View {
+        VStack(spacing: 12) {
+            // Header buttons
+            HStack {
+                Button { onDismiss() } label: {
+                    Image(systemName: viewModel.mode == .edit ? "arrow.left" : "xmark")
+                        .foregroundStyle(.white)
+                        .font(.body.weight(.semibold))
+                        .frame(width: 40, height: 40)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive())
+
+                Spacer()
+
+                if viewModel.mode == .edit {
                     Button {
-                        viewModel.toggleTag(tag)
+                        if viewModel.saveMix() { onDismiss() }
                     } label: {
-                        Text("#\(tag.name)")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(isOn ? .black : .white)
-                            .padding(.horizontal, 14)
-                            .frame(height: 44)
-                            .background(isOn ? Color.white : Color.clear, in: .capsule)
-                            .contentShape(.capsule)
+                        Image(systemName: "checkmark")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .contentShape(.circle)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(in: .capsule)
+                    .glassEffect(.regular.tint(Color.accentColor).interactive())
+                } else {
+                    viewModeMenu
                 }
+            }
+            .padding(.horizontal, 12)
 
+            // Editable title in glass field
+            HStack {
+                TextField("Untitled Mix", text: $viewModel.titleDraft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 17, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        viewModel.commitTitle()
+                        sheetDetent = .height(MixBottomSheetParams.smallDetentHeight)
+                    }
+                    .onChange(of: viewModel.titleDraft) { _, newValue in
+                        if newValue.count > 50 {
+                            viewModel.titleDraft = String(newValue.prefix(50))
+                        }
+                    }
+            }
+            .frame(height: 44)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .glassEffect(.regular.interactive())
+            .padding(.horizontal, 16)
+        }
+        .padding(.top, 16)
+    }
+
+    // MARK: - Tag Grid
+
+    private var tagGrid: some View {
+        FlowLayout(spacing: 8) {
+            ForEach(viewModel.sortedTags) { tag in
+                let isOn = viewModel.tagsForCurrentMix.contains { $0.id == tag.id }
                 Button {
-                    showNewTagSheet = true
+                    viewModel.toggleTag(tag)
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
+                    Text("#\(tag.name)")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(isOn ? .black : .white)
                         .padding(.horizontal, 14)
-                        .frame(height: 44)
+                        .frame(height: 40)
+                        .background(isOn ? Color.white : Color.clear, in: .capsule)
                         .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
                 .glassEffect(in: .capsule)
-                .sheet(isPresented: $showNewTagSheet) {
-                    NewTagSheet { name in
-                        viewModel.createAndAddTag(name: name)
-                    }
-                    .presentationDetents([.height(140)])
-                    .presentationDragIndicator(.hidden)
-                }
             }
-            .padding(.horizontal)
+
+            Button {
+                showNewTagSheet = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(in: .capsule)
         }
+    }
+
+    // MARK: - View Mode Menu
+
+    private var viewModeMenu: some View {
+        Menu {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    viewModel.isAutoScroll.toggle()
+                }
+            } label: {
+                Label(
+                    viewModel.isAutoScroll ? "Stop Auto-scroll" : "Auto-scroll",
+                    systemImage: viewModel.isAutoScroll ? "arrow.up.arrow.down.circle.fill" : "arrow.up.arrow.down.circle"
+                )
+            }
+            Button("Delete", role: .destructive) {
+                onDelete()
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .foregroundStyle(.white)
+                .font(.body.weight(.semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(.circle)
+        }
+        .glassEffect(.regular.interactive())
+    }
+}
+
+// MARK: - Flow Layout
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (positions: [CGPoint], size: CGSize) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxX: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+            maxX = max(maxX, x - spacing)
+        }
+
+        return (positions, CGSize(width: maxX, height: y + rowHeight))
     }
 }

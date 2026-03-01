@@ -15,14 +15,6 @@
 		738B76672F2B200600F968B5 /* SSOTPPinView in Frameworks */ = {isa = PBXBuildFile; productRef = 738B76662F2B200600F968B5 /* SSOTPPinView */; };
 		738B766A2F2B205300F968B5 /* CountryPicker in Frameworks */ = {isa = PBXBuildFile; productRef = 738B76692F2B205300F968B5 /* CountryPicker */; };
 		73B628362F33A5240008C5C8 /* Swifter in Frameworks */ = {isa = PBXBuildFile; productRef = 73B628352F33A5240008C5C8 /* Swifter */; };
-		935A356A2F4AD144001CBC33 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 935A35692F4AD144001CBC33 /* Auth */; };
-		935A356C2F4AD144001CBC33 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 935A356B2F4AD144001CBC33 /* Functions */; };
-		935A356E2F4AD144001CBC33 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 935A356D2F4AD144001CBC33 /* PostgREST */; };
-		935A35702F4AD144001CBC33 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 935A356F2F4AD144001CBC33 /* Realtime */; };
-		935A35722F4AD144001CBC33 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 935A35712F4AD144001CBC33 /* Storage */; };
-		935A35782F4AD51A001CBC33 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 935A35772F4AD51A001CBC33 /* Supabase */; };
-		AA0001012F5A000000000001 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = AA0001002F5A000000000001 /* Supabase */; };
-		AA0004012F5A000000000001 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA0005002F5A000000000001 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B1CA00112F5B000000AAAAAA /* test_track_1.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00012F5B000000AAAAAA /* test_track_1.mp3 */; };
 		B1CA00122F5B000000AAAAAA /* test_track_2.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00022F5B000000AAAAAA /* test_track_2.mp3 */; };
 		B1CA00132F5B000000AAAAAA /* test_track_3.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00032F5B000000AAAAAA /* test_track_3.mp3 */; };
@@ -32,33 +24,8 @@
 		B1CA00172F5B000000BBBBBB /* test_track_7.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = B1CA00072F5B000000BBBBBB /* test_track_7.mp4 */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXContainerItemProxy section */
-		AA0002002F5A000000000001 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 738A77C62F291B860055E007 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = AA0003002F5A000000000001;
-			remoteInfo = ShareExtension;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		AA0004002F5A000000000001 /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				AA0004012F5A000000000001 /* ShareExtension.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
 		738A77CE2F291B860055E007 /* MixerMind.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MixerMind.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA0005002F5A000000000001 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1CA00012F5B000000AAAAAA /* test_track_1.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_1.mp3; sourceTree = "<group>"; };
 		B1CA00022F5B000000AAAAAA /* test_track_2.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_2.mp3; sourceTree = "<group>"; };
 		B1CA00032F5B000000AAAAAA /* test_track_3.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = test_track_3.mp3; sourceTree = "<group>"; };
@@ -68,34 +35,10 @@
 		B1CA00072F5B000000BBBBBB /* test_track_7.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = test_track_7.mp4; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		AA0010002F5A000000000001 /* Exceptions for "MixerMind" folder in "ShareExtension" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Core/Constants.swift,
-				Core/Services/OpenGraphService.swift,
-				Core/Supabase/MediaURLService.swift,
-				Core/Supabase/SupabaseManager.swift,
-				Data/Repositories/MixRepository.swift,
-				Data/Repositories/TagRepository.swift,
-				Network/SharedModels.swift,
-			);
-			target = AA0003002F5A000000000001 /* ShareExtension */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		738A77D02F291B860055E007 /* MixerMind */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				AA0010002F5A000000000001 /* Exceptions for "MixerMind" folder in "ShareExtension" target */,
-			);
 			path = MixerMind;
-			sourceTree = "<group>";
-		};
-		AA0006002F5A000000000001 /* ShareExtension */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -105,28 +48,14 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				935A35782F4AD51A001CBC33 /* Supabase in Frameworks */,
-				935A356C2F4AD144001CBC33 /* Functions in Frameworks */,
 				738B707F2F2A4F9200F968B5 /* SDWebImageSwiftUI in Frameworks */,
 				738B70792F2A4F3E00F968B5 /* SDWebImageMapKit in Frameworks */,
-				935A35702F4AD144001CBC33 /* Realtime in Frameworks */,
-				935A356A2F4AD144001CBC33 /* Auth in Frameworks */,
 				738B76642F2B1FCC00F968B5 /* OTPView in Frameworks */,
 				73B628362F33A5240008C5C8 /* Swifter in Frameworks */,
-				935A356E2F4AD144001CBC33 /* PostgREST in Frameworks */,
 				738B70772F2A4F3E00F968B5 /* SDWebImage in Frameworks */,
-				935A35722F4AD144001CBC33 /* Storage in Frameworks */,
 				738B707C2F2A4F5200F968B5 /* Swinject in Frameworks */,
 				738B766A2F2B205300F968B5 /* CountryPicker in Frameworks */,
 				738B76672F2B200600F968B5 /* SSOTPPinView in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		AA0007002F5A000000000001 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				AA0001012F5A000000000001 /* Supabase in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -137,7 +66,6 @@
 			isa = PBXGroup;
 			children = (
 				738A77D02F291B860055E007 /* MixerMind */,
-				AA0006002F5A000000000001 /* ShareExtension */,
 				B1CA00202F5B000000AAAAAA /* MixerMind/Resources/TestAudio */,
 				935A35762F4AD51A001CBC33 /* Frameworks */,
 				738A77CF2F291B860055E007 /* Products */,
@@ -148,7 +76,6 @@
 			isa = PBXGroup;
 			children = (
 				738A77CE2F291B860055E007 /* MixerMind.app */,
-				AA0005002F5A000000000001 /* ShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -184,12 +111,10 @@
 				738A77CA2F291B860055E007 /* Sources */,
 				738A77CB2F291B860055E007 /* Frameworks */,
 				738A77CC2F291B860055E007 /* Resources */,
-				AA0004002F5A000000000001 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				AA0002012F5A000000000001 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				738A77D02F291B860055E007 /* MixerMind */,
@@ -204,39 +129,10 @@
 				738B76662F2B200600F968B5 /* SSOTPPinView */,
 				738B76692F2B205300F968B5 /* CountryPicker */,
 				73B628352F33A5240008C5C8 /* Swifter */,
-				935A35692F4AD144001CBC33 /* Auth */,
-				935A356B2F4AD144001CBC33 /* Functions */,
-				935A356D2F4AD144001CBC33 /* PostgREST */,
-				935A356F2F4AD144001CBC33 /* Realtime */,
-				935A35712F4AD144001CBC33 /* Storage */,
-				935A35772F4AD51A001CBC33 /* Supabase */,
 			);
 			productName = MixerMind;
 			productReference = 738A77CE2F291B860055E007 /* MixerMind.app */;
 			productType = "com.apple.product-type.application";
-		};
-		AA0003002F5A000000000001 /* ShareExtension */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AA0008002F5A000000000001 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
-			buildPhases = (
-				AA0009002F5A000000000001 /* Sources */,
-				AA0007002F5A000000000001 /* Frameworks */,
-				AA000A002F5A000000000001 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				AA0006002F5A000000000001 /* ShareExtension */,
-			);
-			name = ShareExtension;
-			packageProductDependencies = (
-				AA0001002F5A000000000001 /* Supabase */,
-			);
-			productName = ShareExtension;
-			productReference = AA0005002F5A000000000001 /* ShareExtension.appex */;
-			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -249,9 +145,6 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					738A77CD2F291B860055E007 = {
-						CreatedOnToolsVersion = 26.2;
-					};
-					AA0003002F5A000000000001 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -273,7 +166,6 @@
 				738B76652F2B200600F968B5 /* XCRemoteSwiftPackageReference "SSOTPPinView" */,
 				738B76682F2B205300F968B5 /* XCRemoteSwiftPackageReference "CountryPicker" */,
 				73B628342F33A5240008C5C8 /* XCRemoteSwiftPackageReference "swifter" */,
-				935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 738A77CF2F291B860055E007 /* Products */;
@@ -281,7 +173,6 @@
 			projectRoot = "";
 			targets = (
 				738A77CD2F291B860055E007 /* MixerMind */,
-				AA0003002F5A000000000001 /* ShareExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -301,13 +192,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AA000A002F5A000000000001 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -318,22 +202,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AA0009002F5A000000000001 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		AA0002012F5A000000000001 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = AA0003002F5A000000000001 /* ShareExtension */;
-			targetProxy = AA0002002F5A000000000001 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		738A77D72F291B860055E007 /* Debug */ = {
@@ -472,7 +341,9 @@
 				INFOPLIST_FILE = MixerMindInfo.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "mixer mind";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "mixermind uses Apple Music to let you add songs to your mixes.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "mixermind needs camera access to capture photos for your mixes.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "mixermind needs microphone access to record audio for your mixes.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mixermind uses speech recognition to transcribe voice recordings for search.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -512,7 +383,9 @@
 				INFOPLIST_FILE = MixerMindInfo.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "mixer mind";
 				INFOPLIST_KEY_NSAppleMusicUsageDescription = "mixermind uses Apple Music to let you add songs to your mixes.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "mixermind needs camera access to capture photos for your mixes.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "mixermind needs microphone access to record audio for your mixes.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "mixermind uses speech recognition to transcribe voice recordings for search.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -528,66 +401,6 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
-		};
-		AA000B002F5A000000000001 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 3G6DVA664H;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = ShareExtensionInfo.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Remindr;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = app.mixer.mixermind.ShareExtension;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
-		AA000C002F5A000000000001 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 3G6DVA664H;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = ShareExtensionInfo.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Remindr;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = app.mixer.mixermind.ShareExtension;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -614,15 +427,6 @@
 			buildConfigurations = (
 				738A77DA2F291B860055E007 /* Debug */,
 				738A77DB2F291B860055E007 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		AA0008002F5A000000000001 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				AA000B002F5A000000000001 /* Debug */,
-				AA000C002F5A000000000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -686,14 +490,6 @@
 				minimumVersion = 1.5.0;
 			};
 		};
-		935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/supabase/supabase-swift.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.5.1;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -736,41 +532,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 73B628342F33A5240008C5C8 /* XCRemoteSwiftPackageReference "swifter" */;
 			productName = Swifter;
-		};
-		935A35692F4AD144001CBC33 /* Auth */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Auth;
-		};
-		935A356B2F4AD144001CBC33 /* Functions */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Functions;
-		};
-		935A356D2F4AD144001CBC33 /* PostgREST */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = PostgREST;
-		};
-		935A356F2F4AD144001CBC33 /* Realtime */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Realtime;
-		};
-		935A35712F4AD144001CBC33 /* Storage */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Storage;
-		};
-		935A35772F4AD51A001CBC33 /* Supabase */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Supabase;
-		};
-		AA0001002F5A000000000001 /* Supabase */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 935A35682F4AD144001CBC33 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Supabase;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

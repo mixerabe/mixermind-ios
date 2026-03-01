@@ -1,31 +1,53 @@
 import SwiftUI
 import AVFoundation
 import PhotosUI
+import UniformTypeIdentifiers
 
 // MARK: - Creator Tab
 
 enum CreatorTab: Int, CaseIterable, Identifiable {
-    case text, gallery, `import`, embed, record
+    case media, note, voice, create, `import`
 
     var id: Int { rawValue }
 
     var label: String {
         switch self {
-        case .text: "Text"
-        case .gallery: "Gallery"
-        case .import: "Import"
-        case .embed: "Embed"
-        case .record: "Record"
+        case .media: "Camera"
+        case .note: "Note"
+        case .voice: "Voice"
+        case .create: "Create"
+        case .`import`: "Import"
         }
     }
 
     var icon: String {
         switch self {
-        case .text: "textformat"
-        case .gallery: "photo.on.rectangle"
-        case .import: "play.rectangle"
+        case .media: "camera.fill"
+        case .note: "textformat"
+        case .voice: "mic"
+        case .create: "paintbrush.fill"
+        case .`import`: "square.and.arrow.down"
+        }
+    }
+}
+
+enum CreateSubTab: Int, CaseIterable, Identifiable {
+    case plain, file, embed
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .plain: "Plain"
+        case .file: "File"
+        case .embed: "Embed"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .plain: "paintbrush.fill"
+        case .file: "doc.fill"
         case .embed: "link.badge.plus"
-        case .record: "mic"
         }
     }
 }
@@ -35,7 +57,9 @@ enum CreatorTab: Int, CaseIterable, Identifiable {
 enum CreatorMedia {
     case photo(data: Data, thumbnail: UIImage?)
     case video(data: Data, thumbnail: UIImage?)
-    case audio(data: Data, fileName: String)
+    case voiceRecording(data: Data)
+    case file(data: Data, fileName: String)
+    case importVideo(data: Data, thumbnail: UIImage?, sourceUrl: String, title: String?)
 }
 
 // MARK: - Creator View
@@ -43,88 +67,42 @@ enum CreatorMedia {
 struct CreatorView: View {
     var onDismiss: () -> Void
     var onDone: (Mix, CreatorMedia?) -> Void = { _, _ in }
-    @State private var activeTab: CreatorTab = .text
-    // Text tab state
+    @State private var activeTab: CreatorTab = .note
+    // Note tab state
     @State private var textContent: String = ""
     @State private var isTextEditorFocused: Bool = false
 
-    // Embed tab state
+    // Create > Embed sub-tab state
     @State private var embedUrlText: String = ""
     @State private var isFetchingOG = false
     @State private var embedError: String?
     @FocusState private var isEmbedFieldFocused: Bool
 
-    // Gallery tab state
+    // Media tab state
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var isLoadingGallery = false
-    @State private var galleryError: String?
+    @State private var isLoadingMedia = false
+    @State private var mediaError: String?
     @State private var showPhotoPicker = false
+    @State private var cameraManager = InlineCameraManager()
+
+    // Voice tab state
+    @State private var recordVM = RecordAudioViewModel()
+
+    // Create tab state
+    @State private var activeSubTab: CreateSubTab = .plain
+    @State private var showFilePicker = false
+    @State private var gradientIndex: Int = 0
 
     // Import tab state
     @State private var importUrlText: String = ""
-    @State private var isImporting = false
-    @State private var importProgress: String?
-    @State private var importError: String?
+    @State private var importPlatform: String?
+    @State private var isDownloading = false
+    @State private var downloadError: String?
     @FocusState private var isImportFieldFocused: Bool
 
-    // Record tab state
-    @State private var recordVM = RecordAudioViewModel()
-
-    private var canvasSize: CGSize {
-        let w = UIScreen.main.bounds.width
-        return CGSize(width: w, height: w * (17.0 / 9.0))
-    }
-
     var body: some View {
-        ScrollView {
-            ZStack {
-                // Top bar — X (leading) + Done (trailing, when text entered)
-                VStack {
-                    HStack {
-                        Button { onDismiss() } label: {
-                            Image(systemName: "xmark")
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .contentShape(.circle)
-                        }
-                        .buttonStyle(.plain)
-                        .glassEffect(in: .circle)
-
-                        Spacer()
-
-                        if !textContent.isEmpty && activeTab == .text {
-                            Button { handleDone() } label: {
-                                Text("Done")
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 16)
-                                    .frame(height: 44)
-                                    .contentShape(.capsule)
-                            }
-                            .buttonStyle(.plain)
-                            .glassEffect(in: .capsule)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    Spacer()
-                }
-
-                // Canvas content — below chrome
-                canvasArea
-
-                // Tab bar at bottom
-                VStack {
-                    Spacer()
-                    tabBar
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                }
-            }
-            .containerRelativeFrame(.vertical)
-        }
-        .scrollDisabled(true)
-        .background {
+        ZStack {
+            // Background
             LinearGradient(
                 colors: [
                     Color(hex: "#1a1a2e"),
@@ -134,39 +112,53 @@ struct CreatorView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea()
+
+            // Canvas content
+            canvasArea
+
+            // Bottom bar
+            VStack {
+                Spacer()
+                bottomBar
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+            .ignoresSafeArea(.keyboard)
         }
-        .interactiveDismissDisabled()
-        .onChange(of: activeTab) { oldTab, _ in
-            if oldTab == .record {
+        .onChange(of: activeTab) { oldTab, newTab in
+            if oldTab == .voice {
                 recordVM.stopPlayback()
                 recordVM.cleanup()
                 recordVM = RecordAudioViewModel()
             }
+            if oldTab == .media {
+                cameraManager.stopSession()
+            }
+            if newTab == .media {
+                cameraManager.startSession()
+            }
         }
     }
 
-    // MARK: - Canvas
+    // MARK: - Canvas (tab content, no swiping)
 
     private var canvasArea: some View {
-        tabContent
-            .padding(.top, 60)
+        tabContent(for: activeTab)
     }
 
-    // MARK: - Tab Content
-
     @ViewBuilder
-    private var tabContent: some View {
-        switch activeTab {
-        case .text:
+    private func tabContent(for tab: CreatorTab) -> some View {
+        switch tab {
+        case .note:
             textTabContent
-        case .gallery:
-            galleryTabContent
-        case .import:
+        case .media:
+            mediaTabContent
+        case .voice:
+            voiceTabContent
+        case .create:
+            createTabContent
+        case .`import`:
             importTabContent
-        case .embed:
-            embedTabContent
-        case .record:
-            recordTabContent
         }
     }
 
@@ -177,7 +169,8 @@ struct CreatorView: View {
             CenteredTextView(
                 text: $textContent,
                 isFocused: $isTextEditorFocused,
-                fontSize: textDynamicFontSize
+                fontSize: textDynamicFontSize,
+                containerWidth: ScreenshotService.TextBucket.current.containerWidth
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -197,45 +190,118 @@ struct CreatorView: View {
 
     private var textDynamicFontSize: CGFloat { 17 }
 
-    // MARK: - Gallery Tab
+    // MARK: - Media Tab
 
-    private var galleryTabContent: some View {
+    private var mediaTabContent: some View {
         ZStack {
-            if isLoadingGallery {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(.white)
-                    Text("Loading...")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-            } else if let error = galleryError {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Text(error)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal, 32)
-            } else {
+            if cameraManager.cameraAvailable {
+                // Inline camera preview — fills the canvas
+                InlineCameraPreview(session: cameraManager.session)
+                    .ignoresSafeArea()
+            } else if !cameraManager.permissionDenied {
+                // No camera (simulator) — show placeholder with Library option
                 VStack(spacing: 16) {
-                    Image(systemName: "photo.on.rectangle")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.white.opacity(0.3))
-                    Text("Choose a photo or video")
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.white.opacity(0.2))
+                    Text("No camera available")
                         .font(.title3.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(0.4))
                     Button {
                         showPhotoPicker = true
                     } label: {
-                        Text("Open Library")
+                        Label("Choose from Library", systemImage: "photo.on.rectangle")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.white)
-                            .frame(width: 160, height: 48)
+                            .padding(.horizontal, 20)
+                            .frame(height: 48)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .capsule)
+                }
+            }
+
+            // Camera controls — only when camera is live
+            if cameraManager.cameraAvailable {
+                VStack {
+                    Spacer()
+
+                    HStack(alignment: .center, spacing: 0) {
+                        // Library button (leading)
+                        Button {
+                            showPhotoPicker = true
+                        } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.white.opacity(0.15))
+                                    .frame(width: 44, height: 44)
+                                Image(systemName: "photo.on.rectangle")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(.white)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+
+                        // Shutter button (center)
+                        Button {
+                            cameraManager.capturePhoto { data, image in
+                                guard let data, let image else { return }
+                                let mix = Mix(id: UUID(), type: .media, createdAt: Date(), mediaIsVideo: false)
+                                onDone(mix, .photo(data: data, thumbnail: image))
+                            }
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .strokeBorder(.white.opacity(0.8), lineWidth: 3)
+                                    .frame(width: 72, height: 72)
+                                Circle()
+                                    .fill(.white)
+                                    .frame(width: 60, height: 60)
+                            }
+                        }
+                        .buttonStyle(ScaleButtonStyle())
+
+                        // Flip camera button (trailing)
+                        Button {
+                            cameraManager.switchCamera()
+                        } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.white.opacity(0.15))
+                                    .frame(width: 44, height: 44)
+                                Image(systemName: "camera.rotate")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(.white)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 80)
+                }
+            }
+
+            // Permission denied overlay
+            if cameraManager.permissionDenied {
+                VStack(spacing: 16) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.white.opacity(0.3))
+                    Text("Camera access required")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.6))
+                    Button {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    } label: {
+                        Text("Open Settings")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 20)
+                            .frame(height: 44)
                     }
                     .buttonStyle(.plain)
                     .glassEffect(in: .capsule)
@@ -246,63 +312,41 @@ struct CreatorView: View {
         .photosPicker(isPresented: $showPhotoPicker, selection: $selectedPhotoItem, matching: .any(of: [.images, .videos]))
         .onChange(of: selectedPhotoItem) { _, item in
             guard let item else { return }
-            loadGalleryItem(item)
+            loadPhotoItem(item)
+        }
+        .onAppear {
+            cameraManager.setupSession()
+            cameraManager.startSession()
+        }
+        .onDisappear {
+            cameraManager.stopSession()
         }
     }
 
-    private func loadGalleryItem(_ item: PhotosPickerItem) {
-        isLoadingGallery = true
-        galleryError = nil
-
+    private func loadPhotoItem(_ item: PhotosPickerItem) {
         Task {
-            do {
-                let isVideo = item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) })
-
-                if isVideo {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
-                        galleryError = "Could not load video"
-                        isLoadingGallery = false
-                        return
-                    }
-                    let thumbnail = await generateVideoThumbnail(from: data)
-                    let mix = Mix(
-                        id: UUID(),
-                        type: .video,
-                        createdAt: Date()
-                    )
-                    isLoadingGallery = false
-                    onDone(mix, .video(data: data, thumbnail: thumbnail))
-                } else {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
-                        galleryError = "Could not load photo"
-                        isLoadingGallery = false
-                        return
-                    }
-                    let thumbnail = UIImage(data: data)
-                    let mix = Mix(
-                        id: UUID(),
-                        type: .photo,
-                        createdAt: Date()
-                    )
-                    isLoadingGallery = false
-                    onDone(mix, .photo(data: data, thumbnail: thumbnail))
-                }
-            } catch {
-                galleryError = error.localizedDescription
-                isLoadingGallery = false
+            let isVideo = item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) })
+            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+            if isVideo {
+                let thumbnail = await generateVideoThumbnail(from: data)
+                let mix = Mix(id: UUID(), type: .media, createdAt: Date(), mediaIsVideo: true)
+                onDone(mix, .video(data: data, thumbnail: thumbnail))
+            } else {
+                let thumbnail = UIImage(data: data)
+                let mix = Mix(id: UUID(), type: .media, createdAt: Date(), mediaIsVideo: false)
+                onDone(mix, .photo(data: data, thumbnail: thumbnail))
             }
         }
     }
 
     private func generateVideoThumbnail(from data: Data) async -> UIImage? {
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".mp4")
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
         try? data.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
         let asset = AVURLAsset(url: tempURL)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 800, height: 800)
+        generator.maximumSize = CGSize(width: 600, height: 600)
         guard let cgImage = try? await generator.image(at: .zero).image else { return nil }
         return UIImage(cgImage: cgImage)
     }
@@ -354,7 +398,6 @@ struct CreatorView: View {
         .padding(.horizontal, 32)
         .padding(.top, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { isEmbedFieldFocused = true }
     }
 
     private func embedLink() {
@@ -383,12 +426,20 @@ struct CreatorView: View {
                 )
             }
 
-            let mix = Mix(
+            let defaultGradient = GradientPreset.allPresets[0]
+            let widget = MixWidget(
                 id: UUID(),
                 type: .embed,
-                createdAt: Date(),
                 embedUrl: normalized,
                 embedOg: og
+            )
+            let mix = Mix(
+                id: UUID(),
+                type: .canvas,
+                createdAt: Date(),
+                widgets: [widget],
+                gradientTop: defaultGradient.top,
+                gradientBottom: defaultGradient.bottom
             )
 
             isFetchingOG = false
@@ -396,102 +447,9 @@ struct CreatorView: View {
         }
     }
 
-    // MARK: - Import Tab
+    // MARK: - Voice Tab (was Record)
 
-    private var importTabContent: some View {
-        VStack(spacing: 16) {
-            TextField("Paste a link (YouTube, Instagram, TikTok, Spotify)", text: $importUrlText)
-                .focused($isImportFieldFocused)
-                .keyboardType(.URL)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .padding()
-                .glassEffect(in: .rect(cornerRadius: 12))
-                .onSubmit { importLink() }
-            if let progress = importProgress {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small).tint(.white)
-                    Text(progress).font(.subheadline).foregroundStyle(.white.opacity(0.5))
-                }
-            }
-            if let error = importError {
-                Text(error).font(.subheadline).foregroundStyle(.red.opacity(0.8))
-            }
-            Button { importLink() } label: {
-                Text("Import")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-            }
-            .buttonStyle(.plain)
-            .glassEffect(in: .capsule)
-            .disabled(importUrlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImporting)
-            .opacity(importUrlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isImporting ? 0.4 : 1)
-
-            Spacer()
-        }
-        .padding(.horizontal, 32)
-        .padding(.top, 40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { isImportFieldFocused = true }
-    }
-
-    private func importLink() {
-        let trimmed = importUrlText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isImporting else { return }
-        var normalized = trimmed
-        if !normalized.hasPrefix("http://") && !normalized.hasPrefix("https://") {
-            normalized = "https://\(normalized)"
-        }
-        importError = nil
-        isImporting = true
-        isImportFieldFocused = false
-        Task {
-            do {
-                let mixId = UUID()
-                let localFiles = LocalFileManager.shared
-                let mixDir = mixId.uuidString
-                try FileManager.default.createDirectory(at: localFiles.fileURL(for: mixDir), withIntermediateDirectories: true)
-                if MediaURLService.isSpotifyQuery(normalized) {
-                    importProgress = "Downloading from Spotify..."
-                    let result = try await MediaURLService.downloadSpotify(normalized)
-                    let audioFileURL = localFiles.fileURL(for: "\(mixDir)/import_audio.mp3")
-                    try result.audioData.write(to: audioFileURL)
-                    let mix = Mix(id: mixId, type: .import, createdAt: Date(), importSourceUrl: normalized, importAudioUrl: audioFileURL.absoluteString)
-                    isImporting = false
-                    importProgress = nil
-                    onDone(mix, nil)
-                } else {
-                    importProgress = "Fetching media info..."
-                    let resolved = try await MediaURLService.resolve(normalized)
-                    importProgress = "Downloading video..."
-                    let videoData = try await MediaURLService.downloadMerged(resolved.originalURL)
-                    let tempCheck = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
-                    try videoData.write(to: tempCheck)
-                    let asset = AVURLAsset(url: tempCheck)
-                    let duration = try await asset.load(.duration).seconds
-                    try? FileManager.default.removeItem(at: tempCheck)
-                    if duration > 600 { throw MediaURLService.MediaError.serverError("Video is too long (max 10 minutes)") }
-                    let thumbnail = await generateVideoThumbnail(from: videoData)
-                    let videoFileURL = localFiles.fileURL(for: "\(mixDir)/import_video.mp4")
-                    try videoData.write(to: videoFileURL)
-                    let mix = Mix(id: mixId, type: .import, createdAt: Date(), importSourceUrl: normalized, importMediaUrl: videoFileURL.absoluteString)
-                    isImporting = false
-                    importProgress = nil
-                    onDone(mix, .video(data: videoData, thumbnail: thumbnail))
-                }
-            } catch {
-                isImporting = false
-                importProgress = nil
-                importError = error.localizedDescription
-            }
-        }
-    }
-
-    // MARK: - Record Tab
-
-    private var recordTabContent: some View {
+    private var voiceTabContent: some View {
         VStack(spacing: 0) {
             Spacer()
 
@@ -511,13 +469,13 @@ struct CreatorView: View {
             Spacer().frame(height: 16)
 
             // Time display
-            recordTimeDisplay
+            voiceTimeDisplay
                 .padding(.bottom, 8)
 
             Spacer().frame(maxHeight: 24)
 
             // Control bar
-            recordControlBar
+            voiceControlBar
                 .padding(.bottom, 80)
         }
         .animation(.spring(duration: 0.35), value: recordVM.state)
@@ -534,9 +492,9 @@ struct CreatorView: View {
         }
     }
 
-    // MARK: - Record Time Display
+    // MARK: - Voice Time Display
 
-    private var recordTimeDisplay: some View {
+    private var voiceTimeDisplay: some View {
         VStack(spacing: 6) {
             if recordVM.state == .stopped {
                 HStack(spacing: 4) {
@@ -561,11 +519,11 @@ struct CreatorView: View {
                     .animation(.linear(duration: 0.1), value: recordVM.elapsedTime)
             }
 
-            recordStateTag
+            voiceStateTag
         }
     }
 
-    private var recordStateTag: some View {
+    private var voiceStateTag: some View {
         HStack(spacing: 6) {
             if recordVM.state == .recording {
                 Circle()
@@ -582,16 +540,16 @@ struct CreatorView: View {
                     .foregroundStyle(.blue.opacity(0.8))
             }
 
-            Text(recordStateLabel)
+            Text(voiceStateLabel)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(recordStateLabelColor)
+                .foregroundStyle(voiceStateLabelColor)
                 .textCase(.uppercase)
                 .tracking(2)
         }
         .animation(.default, value: recordVM.state)
     }
 
-    private var recordStateLabel: String {
+    private var voiceStateLabel: String {
         switch recordVM.state {
         case .idle:      return "Ready"
         case .recording: return "Recording"
@@ -600,7 +558,7 @@ struct CreatorView: View {
         }
     }
 
-    private var recordStateLabelColor: Color {
+    private var voiceStateLabelColor: Color {
         switch recordVM.state {
         case .idle:      return .white.opacity(0.4)
         case .recording: return .red.opacity(0.9)
@@ -609,15 +567,15 @@ struct CreatorView: View {
         }
     }
 
-    // MARK: - Record Control Bar
+    // MARK: - Voice Control Bar
 
-    private var recordControlBar: some View {
+    private var voiceControlBar: some View {
         VStack(spacing: 0) {
             if recordVM.state == .stopped {
-                recordReviewControlBar
+                voiceReviewControlBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
-                recordingControlBar
+                voiceRecordingControlBar
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -625,11 +583,11 @@ struct CreatorView: View {
     }
 
     // Recording controls: [Discard] [Record|Pause|Resume] [Stop]
-    private var recordingControlBar: some View {
+    private var voiceRecordingControlBar: some View {
         HStack(alignment: .center, spacing: 0) {
             Group {
                 if recordVM.canDiscard && recordVM.state == .paused {
-                    recordAuxButton("trash", label: "Discard", color: .red.opacity(0.8)) {
+                    voiceAuxButton("trash", label: "Discard", color: .red.opacity(0.8)) {
                         withAnimation { recordVM.discardAndRestart() }
                     }
                 } else {
@@ -641,11 +599,11 @@ struct CreatorView: View {
             Group {
                 switch recordVM.state {
                 case .idle:
-                    recordBigRecordButton { recordVM.startRecording() }
+                    voiceBigRecordButton { recordVM.startRecording() }
                 case .recording:
-                    recordBigPauseButton { recordVM.pauseRecording() }
+                    voiceBigPauseButton { recordVM.pauseRecording() }
                 case .paused:
-                    recordBigResumeButton { recordVM.resumeRecording() }
+                    voiceBigResumeButton { recordVM.resumeRecording() }
                 case .stopped:
                     EmptyView()
                 }
@@ -653,7 +611,7 @@ struct CreatorView: View {
 
             Group {
                 if recordVM.canStop {
-                    recordAuxButton("stop.fill", label: "Stop", color: .white) {
+                    voiceAuxButton("stop.fill", label: "Stop", color: .white) {
                         recordVM.stopRecording()
                     }
                 } else {
@@ -666,28 +624,28 @@ struct CreatorView: View {
     }
 
     // Review controls: [Re-record] [Play/Pause] [Use]
-    private var recordReviewControlBar: some View {
+    private var voiceReviewControlBar: some View {
         HStack(alignment: .center, spacing: 0) {
-            recordAuxButton("arrow.counterclockwise", label: "Re-record", color: .white.opacity(0.7)) {
+            voiceAuxButton("arrow.counterclockwise", label: "Re-record", color: .white.opacity(0.7)) {
                 withAnimation { recordVM.discardAndRestart() }
             }
             .frame(maxWidth: .infinity)
 
-            recordBigPlayButton {
+            voiceBigPlayButton {
                 recordVM.togglePlayback()
             }
 
-            recordAuxButton("checkmark", label: "Use", color: .green) {
-                acceptRecording()
+            voiceAuxButton("checkmark", label: "Use", color: .green) {
+                acceptVoiceRecording()
             }
             .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 24)
     }
 
-    // MARK: - Record Big Buttons
+    // MARK: - Voice Big Buttons
 
-    private func recordBigRecordButton(action: @escaping () -> Void) -> some View {
+    private func voiceBigRecordButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
                 Circle()
@@ -701,7 +659,7 @@ struct CreatorView: View {
         .buttonStyle(ScaleButtonStyle())
     }
 
-    private func recordBigPauseButton(action: @escaping () -> Void) -> some View {
+    private func voiceBigPauseButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
                 Circle()
@@ -718,7 +676,7 @@ struct CreatorView: View {
         .buttonStyle(ScaleButtonStyle())
     }
 
-    private func recordBigResumeButton(action: @escaping () -> Void) -> some View {
+    private func voiceBigResumeButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
                 Circle()
@@ -735,7 +693,7 @@ struct CreatorView: View {
         .buttonStyle(ScaleButtonStyle())
     }
 
-    private func recordBigPlayButton(action: @escaping () -> Void) -> some View {
+    private func voiceBigPlayButton(action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
                 Circle()
@@ -754,7 +712,7 @@ struct CreatorView: View {
         .buttonStyle(ScaleButtonStyle())
     }
 
-    private func recordAuxButton(_ icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func voiceAuxButton(_ icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 7) {
                 Image(systemName: icon)
@@ -771,36 +729,289 @@ struct CreatorView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Accept Recording
+    // MARK: - Accept Voice Recording
 
-    private func acceptRecording() {
-        guard let (data, fileName) = recordVM.getRecordingData() else { return }
+    private func acceptVoiceRecording() {
+        guard let (data, _) = recordVM.getRecordingData() else { return }
         recordVM.stopPlayback()
         recordVM.cleanup()
 
         let mix = Mix(
             id: UUID(),
-            type: .audio,
+            type: .voice,
             createdAt: Date()
         )
-        onDone(mix, .audio(data: data, fileName: fileName))
+        onDone(mix, .voiceRecording(data: data))
+    }
+
+    // MARK: - Create Tab (unified: Plain / File / Embed sub-tabs)
+
+    private var createTabContent: some View {
+        ZStack {
+            // Sub-tab content (behind carousel)
+            Group {
+                switch activeSubTab {
+                case .plain:
+                    createPlainContent
+                case .file:
+                    createFileContent
+                case .embed:
+                    createEmbedContent
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Sub-tab carousel (just above the main bottom bar)
+            VStack {
+                Spacer()
+                CreateSubTabCarousel(
+                    activeSubTab: $activeSubTab,
+                    onCenterTap: { handleSubTabAction() }
+                )
+                .padding(.bottom, 80)
+            }
+            .ignoresSafeArea(.keyboard)
+        }
+    }
+
+    private func handleSubTabAction() {
+        switch activeSubTab {
+        case .plain:
+            let preset = GradientPreset.allPresets[gradientIndex]
+            let mix = Mix(
+                id: UUID(),
+                type: .canvas,
+                createdAt: Date(),
+                gradientTop: preset.top,
+                gradientBottom: preset.bottom
+            )
+            onDone(mix, nil)
+        case .file:
+            showFilePicker = true
+        case .embed:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isEmbedFieldFocused = true
+            }
+        }
+    }
+
+    // Plain sub-tab: live gradient background with cycle button
+    private var createPlainContent: some View {
+        let preset = GradientPreset.allPresets[gradientIndex]
+        return ZStack {
+            // Cycle gradient button — top right
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.5)) {
+                            gradientIndex = (gradientIndex + 1) % GradientPreset.allPresets.count
+                        }
+                    } label: {
+                        Image(systemName: "paintpalette.fill")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(in: .circle)
+                }
+                .padding(.trailing, 16)
+                .padding(.top, 16)
+                Spacer()
+            }
+        }
+        .background(
+            LinearGradient(
+                colors: [Color(hex: preset.top), Color(hex: preset.bottom)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .animation(.easeInOut(duration: 0.5), value: gradientIndex)
+        )
+    }
+
+    // File sub-tab
+    private var createFileContent: some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            Image(systemName: "doc.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(.white.opacity(0.25))
+
+            Text("Upload any file")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.white.opacity(0.5))
+
+            Text("Tap the center button to choose")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.3))
+
+            Spacer()
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            handleFileImport(result)
+        }
+    }
+
+    // Embed sub-tab
+    private var createEmbedContent: some View {
+        embedTabContent
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        guard let data = try? Data(contentsOf: url) else { return }
+        let name = url.lastPathComponent
+
+        let defaultGradient = GradientPreset.allPresets[0]
+        let widget = MixWidget(
+            id: UUID(),
+            type: .file,
+            fileName: name
+        )
+        let mix = Mix(
+            id: UUID(),
+            type: .canvas,
+            createdAt: Date(),
+            widgets: [widget],
+            gradientTop: defaultGradient.top,
+            gradientBottom: defaultGradient.bottom
+        )
+        onDone(mix, .file(data: data, fileName: name))
+    }
+
+    // MARK: - Import Tab
+
+    private var importTabContent: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                if let platform = importPlatform {
+                    Image(systemName: platform == "instagram" ? "camera.circle.fill" : "play.rectangle.fill")
+                        .font(.title2)
+                        .foregroundStyle(platform == "instagram" ? .pink : .red)
+                        .transition(.scale.combined(with: .opacity))
+                }
+
+                TextField("Paste Instagram or YouTube link", text: $importUrlText)
+                    .focused($isImportFieldFocused)
+                    .keyboardType(.URL)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            .padding()
+            .glassEffect(in: .rect(cornerRadius: 12))
+            .onChange(of: importUrlText) { _, newValue in
+                withAnimation(.spring(duration: 0.2)) {
+                    importPlatform = ImportDownloadService.detectPlatform(newValue)
+                }
+            }
+
+            if isDownloading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                    Text("Downloading...")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+
+            if let error = downloadError {
+                Text(error)
+                    .font(.subheadline)
+                    .foregroundStyle(.red.opacity(0.8))
+            }
+
+            HStack(spacing: 12) {
+                Button { startImport(mode: .video) } label: {
+                    Label("Video", systemImage: "video.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(in: .capsule)
+                .disabled(importPlatform == nil || isDownloading)
+                .opacity(importPlatform == nil || isDownloading ? 0.4 : 1)
+
+                Button { startImport(mode: .audioOnly) } label: {
+                    Label("Audio Only", systemImage: "waveform")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(in: .capsule)
+                .disabled(importPlatform == nil || isDownloading)
+                .opacity(importPlatform == nil || isDownloading ? 0.4 : 1)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+        .padding(.top, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { isImportFieldFocused = true }
+    }
+
+    private func startImport(mode: ImportMode) {
+        let trimmed = importUrlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isDownloading else { return }
+
+        var normalized = trimmed
+        if !normalized.hasPrefix("http://") && !normalized.hasPrefix("https://") {
+            normalized = "https://\(normalized)"
+        }
+
+        downloadError = nil
+        isDownloading = true
+        isImportFieldFocused = false
+
+        Task {
+            do {
+                let result = try await ImportDownloadService.download(url: normalized, mode: mode)
+                let thumbnail: UIImage? = await ImportDownloadService.generateThumbnail(from: result.videoData)
+
+                let isVideo = mode == .video
+                let mix = Mix(
+                    id: UUID(),
+                    type: .import,
+                    createdAt: Date(),
+                    title: result.title,
+                    mediaIsVideo: isVideo,
+                    sourceUrl: normalized
+                )
+
+                isDownloading = false
+                onDone(mix, .importVideo(data: result.videoData, thumbnail: thumbnail, sourceUrl: normalized, title: result.title))
+            } catch {
+                downloadError = error.localizedDescription
+                isDownloading = false
+            }
+        }
     }
 
     // MARK: - Done
 
-    private var isDoneVisible: Bool {
-        switch activeTab {
-        case .text: !textContent.isEmpty
-        default: false
-        }
-    }
-
     private func handleDone() {
         switch activeTab {
-        case .text:
+        case .note:
             let mix = Mix(
                 id: UUID(),
-                type: .text,
+                type: .note,
                 createdAt: Date(),
                 textContent: textContent
             )
@@ -810,49 +1021,351 @@ struct CreatorView: View {
         }
     }
 
-    // MARK: - Placeholders
+    // MARK: - Bottom Bar
 
-    private func placeholderContent(icon: String, title: String, subtitle: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 40))
-                .foregroundStyle(.white.opacity(0.3))
-            Text(title)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.5))
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.25))
-                .multilineTextAlignment(.center)
+    private var canSubmit: Bool {
+        switch activeTab {
+        case .note: return !textContent.isEmpty
+        case .create:
+            if activeSubTab == .embed {
+                return !embedUrlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            return false
+        case .media, .voice, .`import`: return false
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Tab Bar
-
-    private var tabBar: some View {
+    private var bottomBar: some View {
         HStack(spacing: 0) {
-            ForEach(CreatorTab.allCases) { tab in
+            // X — dismiss
+            Button { onDismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+
+            // Carousel tab labels
+            CarouselTabBar(activeTab: $activeTab)
+
+            // → submit
+            Button { handleDone() } label: {
+                Image(systemName: "arrow.right")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .opacity(canSubmit ? 1 : 0.25)
+            .disabled(!canSubmit)
+        }
+        .padding(.horizontal, 4)
+        .frame(height: 56)
+        .glassEffect(in: .capsule)
+    }
+}
+
+// MARK: - Carousel Tab Bar
+
+private struct CarouselTabBar: View {
+    @Binding var activeTab: CreatorTab
+    private let tabWidth: CGFloat = 70
+    private let tabs = CreatorTab.allCases
+
+    var body: some View {
+        GeometryReader { geo in
+            let containerCenter = geo.size.width / 2
+            let selectedIndex = CGFloat(activeTab.rawValue)
+            let stripOffset = containerCenter - (selectedIndex * tabWidth) - (tabWidth / 2)
+
+            HStack(spacing: 0) {
+                ForEach(tabs) { tab in
+                    let distance = abs(CGFloat(tab.rawValue) - selectedIndex)
+                    let opacity = max(0.15, 1.0 - distance * 0.35)
+                    let scale = max(0.85, 1.0 - distance * 0.06)
+
+                    Button {
+                        withAnimation(.spring(duration: 0.25)) {
+                            activeTab = tab
+                        }
+                    } label: {
+                        Text(tab.label)
+                            .font(.subheadline.weight(activeTab == tab ? .bold : .regular))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .frame(width: tabWidth, height: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .opacity(opacity)
+                    .scaleEffect(scale)
+                }
+            }
+            .offset(x: stripOffset)
+            .animation(.spring(duration: 0.3), value: activeTab)
+        }
+        .frame(height: 44)
+        .clipped()
+    }
+}
+
+// MARK: - Create Sub-Tab Carousel
+
+private struct CreateSubTabCarousel: View {
+    @Binding var activeSubTab: CreateSubTab
+    var onCenterTap: () -> Void
+
+    private let allTabs = CreateSubTab.allCases
+    private let bigSize: CGFloat = 80
+    private let smallSize: CGFloat = 52
+    // Distance between centers of adjacent circles
+    private let step: CGFloat = 110
+
+    @State private var dragOffset: CGFloat = 0
+
+    var body: some View {
+        let activeIndex = CGFloat(activeSubTab.rawValue)
+        let fractionalShift = -dragOffset / step
+        let currentFractional = activeIndex + fractionalShift
+
+        ZStack {
+            ForEach(allTabs) { tab in
+                let tabIndex = CGFloat(tab.rawValue)
+                // Position relative to center: (tabIndex - activeIndex) * step
+                let xPos = (tabIndex - activeIndex) * step + dragOffset
+                let distance = abs(tabIndex - currentFractional)
+                let isCenter = distance < 0.5
+
+                let t = min(distance, 1.0)
+                let size = bigSize - (bigSize - smallSize) * t
+
                 Button {
-                    withAnimation(.spring(duration: 0.25)) {
-                        activeTab = tab
+                    if isCenter {
+                        onCenterTap()
+                    } else {
+                        withAnimation(.spring(duration: 0.35, bounce: 0.2)) {
+                            activeSubTab = tab
+                        }
                     }
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 18, weight: .medium))
-                        Text(tab.label)
-                            .font(.system(size: 10, weight: .medium))
+                    ZStack {
+                        Circle()
+                            .strokeBorder(.white.opacity(0.8 * max(0, 1.0 - t)), lineWidth: 3)
+                            .frame(width: size + 6, height: size + 6)
+
+                        Circle()
+                            .fill(Color.white.opacity(isCenter ? 0.2 : 0.08))
+                            .frame(width: size, height: size)
+
+                        circleIcon(for: tab)
+                            .foregroundStyle(.white.opacity(isCenter ? 1.0 : 0.5))
                     }
-                    .foregroundStyle(activeTab == tab ? .white : .white.opacity(0.4))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ScaleButtonStyle())
+                .offset(x: xPos)
             }
         }
-        .glassEffect(in: .capsule)
+        .frame(maxWidth: .infinity)
+        .frame(height: bigSize + 6)
+        .contentShape(.rect)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    dragOffset = value.translation.width
+                }
+                .onEnded { value in
+                    let threshold: CGFloat = 40
+                    var newIndex = activeSubTab.rawValue
+                    if value.translation.width < -threshold {
+                        newIndex = min(newIndex + 1, allTabs.count - 1)
+                    } else if value.translation.width > threshold {
+                        newIndex = max(newIndex - 1, 0)
+                    }
+                    withAnimation(.spring(duration: 0.35, bounce: 0.2)) {
+                        activeSubTab = allTabs[newIndex]
+                        dragOffset = 0
+                    }
+                }
+        )
+        .animation(.spring(duration: 0.35, bounce: 0.2), value: activeSubTab)
+    }
+
+    @ViewBuilder
+    private func circleIcon(for tab: CreateSubTab) -> some View {
+        switch tab {
+        case .plain:
+            Text("Aa")
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+        case .file:
+            Image(systemName: "doc.fill")
+                .font(.system(size: 20, weight: .medium))
+        case .embed:
+            Image(systemName: "link")
+                .font(.system(size: 20, weight: .medium))
+        }
+    }
+}
+
+// MARK: - Gradient Presets
+
+struct GradientPreset: Identifiable {
+    let id: String
+    let name: String
+    let top: String
+    let bottom: String
+
+    static let allPresets: [GradientPreset] = [
+        GradientPreset(id: "dark-blue", name: "Dark Blue", top: "#1a1a2e", bottom: "#16213e"),
+        GradientPreset(id: "deep-indigo", name: "Deep Indigo", top: "#0f0c29", bottom: "#302b63"),
+        GradientPreset(id: "dark-purple", name: "Dark Purple", top: "#1a0a1e", bottom: "#3d1a4e"),
+        GradientPreset(id: "dark-forest", name: "Dark Forest", top: "#0a1a0a", bottom: "#1a3d2e"),
+        GradientPreset(id: "dark-crimson", name: "Dark Crimson", top: "#1a0a0a", bottom: "#3d1a1a"),
+        GradientPreset(id: "charcoal", name: "Charcoal", top: "#1a1a1a", bottom: "#2d2d2d"),
+    ]
+}
+
+// MARK: - Inline Camera Manager
+
+@Observable
+final class InlineCameraManager: NSObject {
+    let session = AVCaptureSession()
+    private let photoOutput = AVCapturePhotoOutput()
+    private let sessionQueue = DispatchQueue(label: "camera.session")
+    private var isSessionConfigured = false
+    private var currentPosition: AVCaptureDevice.Position = .back
+    var permissionDenied = false
+    var cameraAvailable = false
+
+    private var captureCompletion: ((Data?, UIImage?) -> Void)?
+
+    func setupSession() {
+        guard !isSessionConfigured else { return }
+        sessionQueue.async { [self] in
+            // Check if a camera device exists at all (not available in Simulator)
+            guard AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) != nil else {
+                DispatchQueue.main.async { self.cameraAvailable = false }
+                return
+            }
+
+            let status = AVCaptureDevice.authorizationStatus(for: .video)
+            switch status {
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: .video) { granted in
+                    if granted {
+                        self.configureSession()
+                    } else {
+                        DispatchQueue.main.async { self.permissionDenied = true }
+                    }
+                }
+            case .authorized:
+                configureSession()
+            default:
+                DispatchQueue.main.async { self.permissionDenied = true }
+            }
+        }
+    }
+
+    private func configureSession() {
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        session.sessionPreset = .photo
+
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentPosition),
+              let input = try? AVCaptureDeviceInput(device: camera),
+              session.canAddInput(input) else { return }
+        session.addInput(input)
+
+        guard session.canAddOutput(photoOutput) else { return }
+        session.addOutput(photoOutput)
+        photoOutput.maxPhotoQualityPrioritization = .speed
+
+        isSessionConfigured = true
+        DispatchQueue.main.async { self.cameraAvailable = true }
+    }
+
+    func startSession() {
+        sessionQueue.async { [self] in
+            if isSessionConfigured && !session.isRunning {
+                session.startRunning()
+            }
+        }
+    }
+
+    func stopSession() {
+        sessionQueue.async { [self] in
+            if session.isRunning {
+                session.stopRunning()
+            }
+        }
+    }
+
+    func capturePhoto(completion: @escaping (Data?, UIImage?) -> Void) {
+        guard isSessionConfigured,
+              photoOutput.connection(with: .video) != nil else {
+            completion(nil, nil)
+            return
+        }
+        captureCompletion = completion
+        let settings = AVCapturePhotoSettings()
+        settings.photoQualityPrioritization = .speed
+        photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+
+    func switchCamera() {
+        sessionQueue.async { [self] in
+            guard let currentInput = session.inputs.first as? AVCaptureDeviceInput else { return }
+            let newPosition: AVCaptureDevice.Position = currentPosition == .back ? .front : .back
+            guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition),
+                  let newInput = try? AVCaptureDeviceInput(device: newDevice) else { return }
+
+            session.beginConfiguration()
+            session.removeInput(currentInput)
+            if session.canAddInput(newInput) {
+                session.addInput(newInput)
+                currentPosition = newPosition
+            } else {
+                session.addInput(currentInput)
+            }
+            session.commitConfiguration()
+        }
+    }
+}
+
+extension InlineCameraManager: AVCapturePhotoCaptureDelegate {
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        guard error == nil, let data = photo.fileDataRepresentation() else {
+            DispatchQueue.main.async { self.captureCompletion?(nil, nil) }
+            return
+        }
+        let image = UIImage(data: data)
+        DispatchQueue.main.async {
+            self.captureCompletion?(data, image)
+            self.captureCompletion = nil
+        }
+    }
+}
+
+// MARK: - Inline Camera Preview
+
+struct InlineCameraPreview: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> PreviewUIView {
+        let view = PreviewUIView()
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ uiView: PreviewUIView, context: Context) {}
+
+    class PreviewUIView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
     }
 }
 
@@ -861,12 +1374,12 @@ struct CreatorView: View {
 import UIKit
 
 private final class NoteStyleUITextView: UITextView {
+    var fixedContainerWidth: CGFloat?
+
     override var contentInset: UIEdgeInsets {
         get { super.contentInset }
         set {
             // Block UIKit's automatic keyboard content inset adjustment.
-            // Only allow our own inset (all zeros) — ignore any bottom inset
-            // that UIKit tries to apply when the keyboard appears.
             var filtered = newValue
             filtered.bottom = 0
             super.contentInset = filtered
@@ -875,9 +1388,27 @@ private final class NoteStyleUITextView: UITextView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let newInsets = UIEdgeInsets(top: 8, left: 8, bottom: 120, right: 8)
-        if textContainerInset != newInsets {
-            textContainerInset = newInsets
+
+        if let fixedWidth = fixedContainerWidth {
+            // Center the text at the fixed bucket width.
+            // lineFragmentPadding is 16 on each side, so the text area is
+            // textContainerInset.left + lineFragmentPadding ... right.
+            // We want: lineFragmentPadding(16) + textWidth = fixedWidth
+            // So textWidth = fixedWidth - 2*16 = fixedWidth - 32
+            // Total consumed = inset.left + 16 + textWidth + 16 + inset.right = bounds.width
+            // inset.left + inset.right = bounds.width - fixedWidth
+            let padding = textContainer.lineFragmentPadding // 16
+            let totalInset = max(bounds.width - fixedWidth - padding * 2, 0)
+            let side = totalInset / 2
+            let newInsets = UIEdgeInsets(top: 8, left: side, bottom: 120, right: side)
+            if textContainerInset != newInsets {
+                textContainerInset = newInsets
+            }
+        } else {
+            let newInsets = UIEdgeInsets(top: 8, left: 8, bottom: 120, right: 8)
+            if textContainerInset != newInsets {
+                textContainerInset = newInsets
+            }
         }
     }
 }
@@ -886,6 +1417,7 @@ private struct CenteredTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
     var fontSize: CGFloat
+    var containerWidth: CGFloat? = nil
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> NoteStyleUITextView {
@@ -901,6 +1433,18 @@ private struct CenteredTextView: UIViewRepresentable {
         tv.isSelectable = true
         tv.textContainer.lineFragmentPadding = 16
         tv.contentInsetAdjustmentBehavior = .never
+        tv.fixedContainerWidth = containerWidth
+
+        // Match lineSpacing with viewer and screenshot renderer
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 6
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .regular)
+        tv.typingAttributes = [
+            .font: font,
+            .foregroundColor: UIColor.white.withAlphaComponent(0.9),
+            .paragraphStyle: paragraphStyle
+        ]
+
         return tv
     }
 
@@ -908,6 +1452,7 @@ private struct CenteredTextView: UIViewRepresentable {
         let newFont = UIFont.systemFont(ofSize: fontSize, weight: .regular)
         if tv.font != newFont { tv.font = newFont }
         if tv.text != text { tv.text = text }
+        tv.fixedContainerWidth = containerWidth
 
         if isFocused && !tv.isFirstResponder { tv.becomeFirstResponder() }
         else if !isFocused && tv.isFirstResponder { tv.resignFirstResponder() }

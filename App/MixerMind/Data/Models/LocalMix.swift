@@ -1,103 +1,105 @@
 import Foundation
-import SwiftData
+import CoreData
 
-@Model
-final class LocalMix {
-    @Attribute(.unique) var mixId: UUID
-    var type: String
-    var createdAt: Date
-    var title: String?
+@objc(LocalMix)
+class LocalMix: NSManagedObject {
+    @NSManaged var mixId: UUID
+    @NSManaged var type: String
+    @NSManaged var createdAt: Date
+    @NSManaged var title: String?
 
     // Text
-    var textContent: String?
+    @NSManaged var textContent: String?
 
-    // Remote URLs (from Supabase)
-    var remoteTtsAudioUrl: String?
-    var remotePhotoUrl: String?
-    var remotePhotoThumbnailUrl: String?
-    var remoteVideoUrl: String?
-    var remoteVideoThumbnailUrl: String?
-    var remoteImportSourceUrl: String?
-    var remoteImportMediaUrl: String?
-    var remoteImportThumbnailUrl: String?
-    var remoteImportAudioUrl: String?
-    var remoteEmbedUrl: String?
-    var remoteEmbedOgJson: Data?
-    var remoteAudioUrl: String?
+    // Embed (legacy — new mixes use widgetsJson)
+    @NSManaged var embedUrl: String?
+    @NSManaged var embedOgJson: Data?
 
-    // Import source URL (metadata, not a file to download)
-    var importSourceUrl: String?
+    // Media flags
+    @NSManaged var mediaIsVideo: Bool
 
     // Local relative paths (relative to Documents/MixMedia/)
-    var localTtsAudioPath: String?
-    var localPhotoPath: String?
-    var localPhotoThumbnailPath: String?
-    var localVideoPath: String?
-    var localVideoThumbnailPath: String?
-    var localImportMediaPath: String?
-    var localImportThumbnailPath: String?
-    var localImportAudioPath: String?
-    var localEmbedOgImagePath: String?
-    var localAudioPath: String?
-    var localScreenshotPath: String?
+    @NSManaged var localMediaPath: String?
+    @NSManaged var localMediaThumbnailPath: String?
+    @NSManaged var localEmbedOgImagePath: String?
+    @NSManaged var localAudioPath: String?
+    @NSManaged var localScreenshotPath: String?
 
     // Screenshot preview
-    var remoteScreenshotUrl: String?
-    var previewScaleY: Double?
-    var gradientTop: String?
-    var gradientBottom: String?
+    @NSManaged var previewScaleY: NSNumber?    // Legacy — kept for migration
+    @NSManaged var previewCropX: NSNumber?      // 0.0 = left, 0.5 = center, 1.0 = right
+    @NSManaged var previewCropY: NSNumber?      // 0.0 = top, 0.5 = center, 1.0 = bottom
+    @NSManaged var previewCropScale: NSNumber?  // Zoom factor (1.0 = no crop)
+    @NSManaged var gradientTop: String?
+    @NSManaged var gradientBottom: String?
+
+    // File (legacy — new mixes use widgetsJson)
+    @NSManaged var fileName: String?
+
+    // Widgets (JSON-encoded [MixWidget])
+    @NSManaged var widgetsJson: Data?
+
+    // Import source URL
+    @NSManaged var sourceUrl: String?
+
+    // Screenshot text bucket (small/medium/large)
+    @NSManaged var screenshotBucket: String?
 
     // Search content (AI-generated description / transcript)
-    var searchContent: String?
+    @NSManaged var searchContent: String?
     // Local embedding from NLContextualEmbedding (encoded [Float])
-    var localEmbedding: Data?
+    @NSManaged var localEmbedding: Data?
 
-    var isSynced: Bool = false
+    var previewScaleYDouble: Double? {
+        get { previewScaleY?.doubleValue }
+        set {
+            guard let value = newValue, value.isFinite else {
+                setPrimitiveValue(nil, forKey: "previewScaleY")
+                return
+            }
+            setPrimitiveValue(NSNumber(value: value), forKey: "previewScaleY")
+        }
+    }
 
-    // Optimistic creation tracking
-    var creationStatus: String?       // nil = normal, "creating" = in progress, "failed" = failed
-    var creationRequestPath: String?  // Relative path to serialized MixCreationRequest JSON
+    var previewCropXDouble: Double? {
+        get { previewCropX?.doubleValue }
+        set {
+            guard let value = newValue, value.isFinite else {
+                setPrimitiveValue(nil, forKey: "previewCropX")
+                return
+            }
+            setPrimitiveValue(NSNumber(value: value), forKey: "previewCropX")
+        }
+    }
 
-    var isBeingCreated: Bool { creationStatus != nil }
+    var previewCropYDouble: Double? {
+        get { previewCropY?.doubleValue }
+        set {
+            guard let value = newValue, value.isFinite else {
+                setPrimitiveValue(nil, forKey: "previewCropY")
+                return
+            }
+            setPrimitiveValue(NSNumber(value: value), forKey: "previewCropY")
+        }
+    }
 
-    init(mixId: UUID, type: String, createdAt: Date) {
+    var previewCropScaleDouble: Double? {
+        get { previewCropScale?.doubleValue }
+        set {
+            guard let value = newValue, value.isFinite else {
+                setPrimitiveValue(nil, forKey: "previewCropScale")
+                return
+            }
+            setPrimitiveValue(NSNumber(value: value), forKey: "previewCropScale")
+        }
+    }
+
+    convenience init(mixId: UUID, type: String, createdAt: Date, context: NSManagedObjectContext) {
+        let entity = NSEntityDescription.entity(forEntityName: "LocalMix", in: context)!
+        self.init(entity: entity, insertInto: context)
         self.mixId = mixId
         self.type = type
         self.createdAt = createdAt
-    }
-
-    // MARK: - Update from Remote
-
-    func updateFromRemote(_ mix: Mix) {
-        type = mix.type.rawValue
-        createdAt = mix.createdAt
-        title = mix.title
-        textContent = mix.textContent
-
-        remoteTtsAudioUrl = mix.ttsAudioUrl
-        remotePhotoUrl = mix.photoUrl
-        remotePhotoThumbnailUrl = mix.photoThumbnailUrl
-        remoteVideoUrl = mix.videoUrl
-        remoteVideoThumbnailUrl = mix.videoThumbnailUrl
-        remoteImportSourceUrl = mix.importSourceUrl
-        remoteImportMediaUrl = mix.importMediaUrl
-        remoteImportThumbnailUrl = mix.importThumbnailUrl
-        remoteImportAudioUrl = mix.importAudioUrl
-        remoteEmbedUrl = mix.embedUrl
-        remoteAudioUrl = mix.audioUrl
-        importSourceUrl = mix.importSourceUrl
-        remoteScreenshotUrl = mix.screenshotUrl
-        previewScaleY = mix.previewScaleY
-        gradientTop = mix.gradientTop
-        gradientBottom = mix.gradientBottom
-
-        searchContent = mix.content
-
-        if let og = mix.embedOg {
-            remoteEmbedOgJson = try? JSONEncoder().encode(og)
-        } else {
-            remoteEmbedOgJson = nil
-        }
     }
 
     // MARK: - Convert to Mix
@@ -105,51 +107,98 @@ final class LocalMix {
     func toMix(tags: [Tag] = []) -> Mix {
         let fileManager = LocalFileManager.shared
 
-        let embedOg: OGMetadata? = {
-            guard let data = remoteEmbedOgJson else { return nil }
-            guard var og = try? JSONDecoder().decode(OGMetadata.self, from: data) else { return nil }
-            // Rewrite OG image URL to local file:// path when available
-            if let localPath = localEmbedOgImagePath, fileManager.fileExists(at: localPath) {
-                og = OGMetadata(
-                    title: og.title,
-                    description: og.description,
-                    imageUrl: fileManager.fileURL(for: localPath).absoluteString,
-                    host: og.host
-                )
+        // Decode widgets from JSON, or migrate legacy embed/file records
+        let widgets: [MixWidget] = {
+            // First try decoding widgetsJson
+            if let data = widgetsJson,
+               let decoded = try? JSONDecoder().decode([MixWidget].self, from: data) {
+                return decoded
             }
-            return og
+
+            // Legacy migration: build widgets from old fields
+            var migrated: [MixWidget] = []
+
+            // Legacy embed → embed widget
+            if type == "embed", let url = embedUrl, !url.isEmpty {
+                let og: OGMetadata? = {
+                    guard let data = embedOgJson else { return nil }
+                    guard var og = try? JSONDecoder().decode(OGMetadata.self, from: data) else { return nil }
+                    if let localPath = localEmbedOgImagePath, fileManager.fileExists(at: localPath) {
+                        og = OGMetadata(
+                            title: og.title,
+                            description: og.description,
+                            imageUrl: fileManager.fileURL(for: localPath).absoluteString,
+                            host: og.host
+                        )
+                    }
+                    return og
+                }()
+                migrated.append(MixWidget(
+                    id: UUID(),
+                    type: .embed,
+                    embedUrl: url,
+                    embedOg: og
+                ))
+            }
+
+            // Legacy file → file widget
+            if type == "file", let name = fileName, !name.isEmpty {
+                migrated.append(MixWidget(
+                    id: UUID(),
+                    type: .file,
+                    fileName: name,
+                    fileLocalPath: localMediaPath
+                ))
+            }
+
+            return migrated
         }()
+
+        // Map old type strings to new MixType
+        let mixType: MixType = {
+            switch type {
+            case "text": return .note
+            case "embed": return .canvas
+            case "file": return .canvas
+            case "import": return .import
+            default: return MixType(rawValue: type) ?? .note
+            }
+        }()
+
+        // OG metadata for embed widget (non-legacy path — from widgetsJson)
+        // Already handled inside the widgets array
+
+        // New crop model — fall back to legacy previewScaleY for old mixes
+        let cropX = previewCropXDouble
+        let cropY = previewCropYDouble
+        let cropScale: Double? = previewCropScaleDouble ?? previewScaleY?.doubleValue
 
         return Mix(
             id: mixId,
-            type: MixType(rawValue: type) ?? .text,
+            type: mixType,
             createdAt: createdAt,
             title: title,
             tags: tags,
             textContent: textContent,
-            ttsAudioUrl: localURL(localTtsAudioPath, remote: remoteTtsAudioUrl, fileManager: fileManager),
-            photoUrl: localURL(localPhotoPath, remote: remotePhotoUrl, fileManager: fileManager),
-            photoThumbnailUrl: localURL(localPhotoThumbnailPath, remote: remotePhotoThumbnailUrl, fileManager: fileManager),
-            videoUrl: localURL(localVideoPath, remote: remoteVideoUrl, fileManager: fileManager),
-            videoThumbnailUrl: localURL(localVideoThumbnailPath, remote: remoteVideoThumbnailUrl, fileManager: fileManager),
-            importSourceUrl: importSourceUrl,
-            importMediaUrl: localURL(localImportMediaPath, remote: remoteImportMediaUrl, fileManager: fileManager),
-            importThumbnailUrl: localURL(localImportThumbnailPath, remote: remoteImportThumbnailUrl, fileManager: fileManager),
-            importAudioUrl: localURL(localImportAudioPath, remote: remoteImportAudioUrl, fileManager: fileManager),
-            embedUrl: remoteEmbedUrl,
-            embedOg: embedOg,
-            audioUrl: localURL(localAudioPath, remote: remoteAudioUrl, fileManager: fileManager),
-            screenshotUrl: localURL(localScreenshotPath, remote: remoteScreenshotUrl, fileManager: fileManager),
-            previewScaleY: previewScaleY,
+            audioUrl: localURL(localAudioPath, fileManager: fileManager),
+            mediaUrl: localURL(localMediaPath, fileManager: fileManager),
+            mediaThumbnailUrl: localURL(localMediaThumbnailPath, fileManager: fileManager),
+            mediaIsVideo: mediaIsVideo,
+            widgets: widgets,
+            content: searchContent,
+            screenshotUrl: localURL(localScreenshotPath, fileManager: fileManager),
+            previewCropX: cropX,
+            previewCropY: cropY,
+            previewCropScale: cropScale,
             gradientTop: gradientTop,
-            gradientBottom: gradientBottom
+            gradientBottom: gradientBottom,
+            sourceUrl: sourceUrl,
+            screenshotBucket: screenshotBucket
         )
     }
 
-    private func localURL(_ localPath: String?, remote: String?, fileManager: LocalFileManager) -> String? {
-        if let localPath, fileManager.fileExists(at: localPath) {
-            return fileManager.fileURL(for: localPath).absoluteString
-        }
-        return remote
+    private func localURL(_ localPath: String?, fileManager: LocalFileManager) -> String? {
+        guard let localPath, fileManager.fileExists(at: localPath) else { return nil }
+        return fileManager.fileURL(for: localPath).absoluteString
     }
 }

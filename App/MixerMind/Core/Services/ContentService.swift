@@ -1,73 +1,40 @@
 import Foundation
+import Speech
 
 enum ContentService {
 
-    // MARK: - Transcribe audio to text
-
-    static func fromAudio(data audioData: Data, fileName: String, contentType: String = "audio/m4a") async throws -> String {
-        guard !audioData.isEmpty else { throw ContentError.emptyInput }
-
-        guard let endpoint = URL(string: "\(Constants.backendURL)/api/content/from-audio") else {
-            throw ContentError.invalidResponse
+    static func fromAudio(fileURL: URL?) async -> String {
+        guard let fileURL else { return "Voice recording" }
+        do {
+            return try await transcribe(fileURL: fileURL)
+        } catch {
+            return "Voice recording"
         }
-
-        let boundary = UUID().uuidString
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
-
-        var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"audio\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
-        body.append(audioData)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        request.httpBody = body
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw ContentError.invalidResponse
-        }
-
-        let result = try JSONDecoder().decode(ContentResponse.self, from: data)
-        return result.content
     }
 
-    // MARK: - Describe image via vision LLM
+    static func fromImage() -> String {
+        "this is an image"
+    }
 
-    static func fromImage(imageData: Data) async throws -> String {
-        guard !imageData.isEmpty else { throw ContentError.emptyInput }
-
-        guard let endpoint = URL(string: "\(Constants.backendURL)/api/content/from-image") else {
-            throw ContentError.invalidResponse
-        }
-
-        let base64 = imageData.base64EncodedString()
-
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 60
-
-        let body = ["image_base64": base64]
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw ContentError.invalidResponse
-        }
-
-        let result = try JSONDecoder().decode(ContentResponse.self, from: data)
-        return result.content
+    static func fromVideo() -> String {
+        "this is a video"
     }
 
     // MARK: - Build content from text (direct copy)
 
     static func fromText(_ text: String) -> String {
         text
+    }
+
+    static func fromFile(name: String) -> String {
+        name
+    }
+
+    static func fromImport(sourceUrl: String, title: String?) -> String {
+        var parts: [String] = []
+        if let title, !title.isEmpty { parts.append(title) }
+        parts.append(sourceUrl)
+        return parts.joined(separator: " — ")
     }
 
     // MARK: - Build content from embed metadata
@@ -81,21 +48,43 @@ enum ContentService {
         return parts.joined(separator: " — ")
     }
 
-    // MARK: - Models
+    // MARK: - Transcription
 
-    private struct ContentResponse: Decodable {
-        let content: String
-    }
+    private static func transcribe(fileURL: URL) async throws -> String {
+        let recognizer = SFSpeechRecognizer()
+        guard let recognizer, recognizer.isAvailable else {
+            throw TranscriptionError.unavailable
+        }
 
-    enum ContentError: LocalizedError {
-        case emptyInput
-        case invalidResponse
+        let status = SFSpeechRecognizer.authorizationStatus()
+        if status == .notDetermined {
+            let granted = await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: status == .authorized)
+                }
+            }
+            guard granted else { throw TranscriptionError.denied }
+        } else if status != .authorized {
+            throw TranscriptionError.denied
+        }
 
-        var errorDescription: String? {
-            switch self {
-            case .emptyInput: return "No content to analyze"
-            case .invalidResponse: return "Failed to generate content"
+        let request = SFSpeechURLRecognitionRequest(url: fileURL)
+        request.shouldReportPartialResults = false
+
+        return try await withCheckedThrowingContinuation { continuation in
+            recognizer.recognitionTask(with: request) { result, error in
+                if let result, result.isFinal {
+                    let text = result.bestTranscription.formattedString
+                    continuation.resume(returning: text.isEmpty ? "Voice recording" : text)
+                } else if let error {
+                    continuation.resume(throwing: error)
+                }
             }
         }
+    }
+
+    private enum TranscriptionError: Error {
+        case unavailable
+        case denied
     }
 }

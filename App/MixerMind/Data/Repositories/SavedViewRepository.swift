@@ -1,80 +1,51 @@
 import Foundation
-import Supabase
+import CoreData
 
 final class SavedViewRepository {
-    private var client: SupabaseClient {
-        guard let client = SupabaseManager.shared.client else {
-            fatalError("SupabaseManager not configured. Call configure() first.")
+
+    func listSavedViews(context: NSManagedObjectContext) throws -> [SavedView] {
+        let request = NSFetchRequest<LocalSavedView>(entityName: "LocalSavedView")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \LocalSavedView.name, ascending: true)]
+        return try context.fetch(request).map { $0.toSavedView() }
+    }
+
+    func createSavedView(name: String, tagIds: [UUID], context: NSManagedObjectContext) throws -> SavedView {
+        let local = LocalSavedView(name: name, tagIds: tagIds, context: context)
+        try context.save()
+        return local.toSavedView()
+    }
+
+    func updateTagIds(id: UUID, tagIds: [UUID], context: NSManagedObjectContext) throws -> SavedView? {
+        let request = NSFetchRequest<LocalSavedView>(entityName: "LocalSavedView")
+        request.predicate = NSPredicate(format: "viewId == %@", id as CVarArg)
+        request.fetchLimit = 1
+        if let local = try context.fetch(request).first {
+            local.tagIds = tagIds
+            try context.save()
+            return local.toSavedView()
         }
-        return client
+        return nil
     }
 
-    func listSavedViews() async throws -> [SavedView] {
-        try await client.from("playlists")
-            .select()
-            .order("name")
-            .execute()
-            .value
+    func updateName(id: UUID, name: String, context: NSManagedObjectContext) throws -> SavedView? {
+        let request = NSFetchRequest<LocalSavedView>(entityName: "LocalSavedView")
+        request.predicate = NSPredicate(format: "viewId == %@", id as CVarArg)
+        request.fetchLimit = 1
+        if let local = try context.fetch(request).first {
+            local.name = name
+            try context.save()
+            return local.toSavedView()
+        }
+        return nil
     }
 
-    func createSavedView(name: String, tagIds: [UUID]) async throws -> SavedView {
-        let payload = SavedViewPayload(name: name, tagIds: tagIds)
-        return try await client.from("playlists")
-            .insert(payload)
-            .select()
-            .single()
-            .execute()
-            .value
+    func deleteSavedView(id: UUID, context: NSManagedObjectContext) throws {
+        let request = NSFetchRequest<LocalSavedView>(entityName: "LocalSavedView")
+        request.predicate = NSPredicate(format: "viewId == %@", id as CVarArg)
+        request.fetchLimit = 1
+        if let local = try context.fetch(request).first {
+            context.delete(local)
+            try context.save()
+        }
     }
-
-    func updateTagIds(id: UUID, tagIds: [UUID]) async throws -> SavedView {
-        let payload = TagIdsPayload(tagIds: tagIds)
-        return try await client.from("playlists")
-            .update(payload)
-            .eq("id", value: id)
-            .select()
-            .single()
-            .execute()
-            .value
-    }
-
-    func updateName(id: UUID, name: String) async throws -> SavedView {
-        let payload = NamePayload(name: name)
-        return try await client.from("playlists")
-            .update(payload)
-            .eq("id", value: id)
-            .select()
-            .single()
-            .execute()
-            .value
-    }
-
-    func deleteSavedView(id: UUID) async throws {
-        try await client.from("playlists")
-            .delete()
-            .eq("id", value: id)
-            .execute()
-    }
-}
-
-private struct SavedViewPayload: Encodable {
-    let name: String
-    let tagIds: [UUID]
-
-    enum CodingKeys: String, CodingKey {
-        case name
-        case tagIds = "tag_ids"
-    }
-}
-
-private struct TagIdsPayload: Encodable {
-    let tagIds: [UUID]
-
-    enum CodingKeys: String, CodingKey {
-        case tagIds = "tag_ids"
-    }
-}
-
-private struct NamePayload: Encodable {
-    let name: String
 }

@@ -1,5 +1,4 @@
 import Foundation
-import Supabase
 
 final class LocalFileManager: Sendable {
     static let shared = LocalFileManager()
@@ -26,16 +25,7 @@ final class LocalFileManager: Sendable {
         FileManager.default.fileExists(atPath: fileURL(for: relativePath).path)
     }
 
-    // MARK: - Download from Supabase Storage
-
-    /// Downloads a file from Supabase Storage using its storage path (e.g. "UUID/filename.jpg").
-    /// Returns the relative path within MixMedia/.
-    func downloadFromStorage(storagePath: String) async throws -> String {
-        let publicURL = try storagePublicURL(for: storagePath)
-        return try await download(from: publicURL, relativePath: storagePath)
-    }
-
-    /// Downloads from an external URL (Apple Music artwork, embed OG images).
+    /// Downloads from an external URL.
     /// Stores under `external/{hash}/{filename}`.
     func downloadFromURL(_ url: URL) async throws -> String {
         let hash = String(url.absoluteString.hashValue, radix: 16, uppercase: false)
@@ -43,27 +33,6 @@ final class LocalFileManager: Sendable {
         let filename = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
         let relativePath = "external/\(hash)/\(filename)"
         return try await download(from: url, relativePath: relativePath)
-    }
-
-    // MARK: - Storage Path Extraction
-
-    /// Extracts `{UUID}/{filename}` from a full Supabase public URL.
-    /// Example: `https://xxx.supabase.co/storage/v1/object/public/mix-media/UUID/file.jpg` -> `UUID/file.jpg`
-    /// Returns nil for external URLs (Apple Music, etc.)
-    func storagePath(from publicURL: String) -> String? {
-        guard let url = URL(string: publicURL),
-              let host = url.host,
-              host.contains("supabase") else {
-            return nil
-        }
-
-        let pathComponents = url.pathComponents
-        // Look for "mix-media" in the path and take everything after it
-        if let idx = pathComponents.firstIndex(of: "mix-media"), idx + 1 < pathComponents.count {
-            let remaining = pathComponents[(idx + 1)...]
-            return remaining.joined(separator: "/")
-        }
-        return nil
     }
 
     // MARK: - File Management
@@ -137,10 +106,4 @@ final class LocalFileManager: Sendable {
         return relativePath
     }
 
-    private func storagePublicURL(for storagePath: String) throws -> URL {
-        guard let client = SupabaseManager.shared.client else {
-            throw URLError(.notConnectedToInternet)
-        }
-        return try client.storage.from("mix-media").getPublicURL(path: storagePath)
-    }
 }

@@ -124,7 +124,7 @@ struct MiniMixPlayer: View {
     private var thumbnail: some View {
         let mix = viewModel.currentMix
         switch mix.type {
-        case .text:
+        case .note:
             ZStack {
                 Self.darkBg
                 if let text = mix.textContent, !text.isEmpty {
@@ -136,50 +136,60 @@ struct MiniMixPlayer: View {
                         .padding(6)
                 }
             }
-        case .photo:
-            LocalAsyncImage(url: URL(string: mix.photoThumbnailUrl ?? mix.photoUrl ?? "")) { image in
+        case .media:
+            LocalAsyncImage(url: URL(string: mix.mediaThumbnailUrl ?? mix.mediaUrl ?? "")) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
                 Self.darkBg
             }
-        case .video:
-            LocalAsyncImage(url: URL(string: mix.videoThumbnailUrl ?? "")) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
+        case .voice:
+            ZStack {
                 Self.darkBg
+                Image(systemName: "mic.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.7))
             }
-        case .import:
-            if let thumb = mix.importThumbnailUrl {
-                LocalAsyncImage(url: URL(string: thumb)) { image in
+        case .canvas:
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(hex: mix.gradientTop ?? "#1a1a2e"),
+                        Color(hex: mix.gradientBottom ?? "#16213e")
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                // Embed widget thumbnail
+                if let ogUrl = mix.embedOg?.imageUrl, !ogUrl.isEmpty {
+                    LocalAsyncImage(url: URL(string: ogUrl)) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Image(systemName: "link")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+                // File widget icon
+                if mix.fileWidget != nil {
+                    Image(systemName: "doc.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+        case .`import`:
+            if mix.mediaIsVideo {
+                LocalAsyncImage(url: URL(string: mix.mediaThumbnailUrl ?? mix.mediaUrl ?? "")) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Self.darkBg
                 }
             } else {
                 ZStack {
-                    Self.darkBg
+                    Color.black
                     Image(systemName: "waveform")
                         .font(.title3)
                         .foregroundStyle(.white.opacity(0.7))
                 }
-            }
-        case .embed:
-            LocalAsyncImage(url: URL(string: mix.embedOg?.imageUrl ?? "")) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                ZStack {
-                    Self.darkBg
-                    Image(systemName: "link")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-            }
-        case .audio:
-            ZStack {
-                Self.darkBg
-                Image(systemName: "mic.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white.opacity(0.7))
             }
         }
     }

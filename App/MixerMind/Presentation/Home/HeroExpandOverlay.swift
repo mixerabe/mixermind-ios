@@ -5,16 +5,21 @@ struct HeroExpandOverlay: View, Animatable {
 
     let screenshotURL: URL
     let sourceFrame: CGRect
-    let previewScaleY: CGFloat
+    let cropX: CGFloat
+    let cropY: CGFloat
+    let cropScale: CGFloat
 
     var progress: CGFloat
 
-    private static let canvasAspect: CGFloat = 9.0 / 17.0
+    private static let canvasAspect: CGFloat = ScreenshotService.canvasAspect
 
-    init(screenshotURL: URL, expanded: Bool, sourceFrame: CGRect, previewScaleY: CGFloat) {
+    init(screenshotURL: URL, expanded: Bool, sourceFrame: CGRect,
+         cropX: CGFloat, cropY: CGFloat, cropScale: CGFloat) {
         self.screenshotURL = screenshotURL
         self.sourceFrame = sourceFrame
-        self.previewScaleY = previewScaleY
+        self.cropX = cropX
+        self.cropY = cropY
+        self.cropScale = cropScale
         self.progress = expanded ? 1.0 : 0.0
     }
 
@@ -31,9 +36,9 @@ struct HeroExpandOverlay: View, Animatable {
     var body: some View {
         let screen = UIScreen.main.bounds
         let canvasW = screen.width
-        let canvasH = canvasW * (17.0 / 9.0)
+        let canvasH = canvasW / Self.canvasAspect
 
-        let croppedAspect = Self.canvasAspect * previewScaleY
+        let croppedAspect = Self.canvasAspect * cropScale
 
         // Card dimensions
         let cardW = sourceFrame.width
@@ -51,16 +56,22 @@ struct HeroExpandOverlay: View, Animatable {
         let currentY = snapToPixel(sourceFrame.midY + (canvasH / 2 - sourceFrame.midY) * t)
         let currentRadius: CGFloat = 12 + (16 - 12) * t
 
+        // Animate crop offset from card position to center (0 offset at full expansion)
+        let overflowY = currentImgH - currentClipH
+        let currentCropY = cropY + (0.5 - cropY) * t  // lerp toward 0.5
+        let offsetY = -overflowY * currentCropY
+
         LocalAsyncImage(url: screenshotURL) { image in
             image
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: currentW, height: currentImgH)
+                .offset(y: offsetY)
+                .frame(width: currentW, height: currentClipH, alignment: .topLeading)
+                .clipped()
         } placeholder: {
             Color(red: 0.08, green: 0.08, blue: 0.08)
         }
-        .frame(width: currentW, height: currentClipH)
-        .clipped()
         .clipShape(.rect(cornerRadius: currentRadius))
         .position(x: currentX, y: currentY)
     }

@@ -1,209 +1,73 @@
 import Foundation
-import SwiftData
+import CoreData
 import AVFoundation
 import UIKit
 
-extension Notification.Name {
-    static let mixCreationStatusChanged = Notification.Name("mixCreationStatusChanged")
-}
-
-/// In-memory media blob passed from Phase 1 → Phase 2.
-/// Avoids writing large video data to disk synchronously during create.
-/// Only used for initial enqueue; retry reads from disk.
+/// In-memory media blob passed alongside the creation request.
 struct MixCreationMedia {
-    var photoData: Data?
-    var videoData: Data?
+    var mediaData: Data?
+    var mediaIsVideo: Bool = false
+    var mediaThumbnailData: Data?
     var audioData: Data?
-    var importMediaData: Data?
-    var importAudioData: Data?
     var embedOgImageData: Data?
-    var photoThumbnailData: Data?
-    var videoThumbnailData: Data?
-    var importThumbnailData: Data?
+    var fileData: Data?
+    var fileName: String?
 }
 
 @Observable @MainActor
 final class MixCreationService {
-    private var activeTasks: [UUID: Task<Void, Never>] = [:]
     private let fileManager = LocalFileManager.shared
 
-    // MARK: - Enqueue (Phase 1 result → Phase 2 background)
+    static let didFinishCreation = Notification.Name("MixCreationService.didFinishCreation")
 
-    func enqueue(request: MixCreationRequest, media: MixCreationMedia, modelContext: ModelContext) {
-        // 1. Create LocalMix with creation status
-        let local = LocalMix(mixId: request.mixId, type: request.mixType.rawValue, createdAt: request.createdAt)
-        local.creationStatus = "creating"
-        local.title = request.title
-        local.textContent = request.textContent
-        local.importSourceUrl = request.importSourceUrl
-        local.remoteEmbedUrl = request.embedUrl
-        local.localScreenshotPath = request.screenshotPath
-        local.previewScaleY = request.previewScaleY
-        local.gradientTop = request.gradientTop
-        local.gradientBottom = request.gradientBottom
+    // MARK: - Create (background, fire-and-forget)
 
-        if let ogData = request.embedOgJson {
-            local.remoteEmbedOgJson = ogData
+    /// Persists raw media synchronously then kicks off heavy processing in the background.
+    /// Posts `didFinishCreation` when the mix is saved to Core Data.
+    func create(request: MixCreationRequest, media: MixCreationMedia, context: NSManagedObjectContext) {
+        var updatedRequest = request
+        persistRawMedia(request: &updatedRequest, media: media)
+        Task {
+            await process(request: updatedRequest, context: context)
+            NotificationCenter.default.post(name: Self.didFinishCreation, object: nil)
         }
-
-        // Set local media paths from Phase 1 raw files (for screenshot display)
-        local.localPhotoPath = request.rawPhotoPath
-        local.localPhotoThumbnailPath = request.rawPhotoThumbnailPath
-        local.localVideoThumbnailPath = request.rawVideoThumbnailPath
-        local.localImportThumbnailPath = request.rawImportThumbnailPath
-        local.localEmbedOgImagePath = request.rawEmbedOgImagePath
-
-        // 2. Persist request JSON to disk (lightweight — only paths & metadata)
-        let requestPath = "\(request.mixId.uuidString)/request.json"
-        let requestURL = fileManager.fileURL(for: requestPath)
-        if let data = try? JSONEncoder().encode(request) {
-            try? data.write(to: requestURL)
-        }
-        local.creationRequestPath = requestPath
-
-        // 3. Save LocalMix
-        modelContext.insert(local)
-
-        // 4. Save LocalMixTag rows
-        for tagId in request.selectedTagIds {
-            modelContext.insert(LocalMixTag(mixId: request.mixId, tagId: tagId))
-        }
-
-        try? modelContext.save()
-
-        // 5. Kick off background processing with in-memory media
-        spawnBackgroundTask(for: request, media: media, modelContext: modelContext)
     }
 
-    // MARK: - Retry
+    // MARK: - Persist Raw Media
 
-    func retry(mixId: UUID, modelContext: ModelContext) {
-        // Read persisted request from disk
-        guard let local = fetchLocalMix(mixId: mixId, modelContext: modelContext),
-              let requestPath = local.creationRequestPath else { return }
-
-        let requestURL = fileManager.fileURL(for: requestPath)
-        guard let data = try? Data(contentsOf: requestURL),
-              let request = try? JSONDecoder().decode(MixCreationRequest.self, from: data) else { return }
-
-        local.creationStatus = "creating"
-        try? modelContext.save()
-        NotificationCenter.default.post(name: .mixCreationStatusChanged, object: nil)
-
-        spawnBackgroundTask(for: request, media: nil, modelContext: modelContext)
-    }
-
-    // MARK: - Discard
-
-    func discard(mixId: UUID, modelContext: ModelContext) {
-        // Cancel active task
-        activeTasks[mixId]?.cancel()
-        activeTasks[mixId] = nil
-
-        // Delete LocalMix
-        if let local = fetchLocalMix(mixId: mixId, modelContext: modelContext) {
-            modelContext.delete(local)
-        }
-
-        // Delete LocalMixTag rows
-        if let rows = try? modelContext.fetch(FetchDescriptor<LocalMixTag>()) {
-            for row in rows where row.mixId == mixId {
-                modelContext.delete(row)
-            }
-        }
-
-        try? modelContext.save()
-
-        // Delete local files for this mix
-        let dirURL = fileManager.fileURL(for: mixId.uuidString)
-        try? FileManager.default.removeItem(at: dirURL)
-
-        // Fire-and-forget: try deleting from Supabase if a row was partially created
-        let repo: MixRepository = resolve()
-        Task { try? await repo.deleteMix(id: mixId) }
-
-        NotificationCenter.default.post(name: .mixCreationStatusChanged, object: nil)
-    }
-
-    // MARK: - Resume Incomplete (app launch)
-
-    func resumeIncomplete(modelContext: ModelContext) {
-        let descriptor = FetchDescriptor<LocalMix>()
-        guard let locals = try? modelContext.fetch(descriptor) else { return }
-
-        for local in locals where local.creationStatus == "creating" {
-            guard let requestPath = local.creationRequestPath else {
-                local.creationStatus = "failed"
-                continue
-            }
-
-            let requestURL = fileManager.fileURL(for: requestPath)
-            guard let data = try? Data(contentsOf: requestURL),
-                  let request = try? JSONDecoder().decode(MixCreationRequest.self, from: data) else {
-                local.creationStatus = "failed"
-                continue
-            }
-
-            spawnBackgroundTask(for: request, media: nil, modelContext: modelContext)
-        }
-
-        try? modelContext.save()
-    }
-
-    // MARK: - Background Processing (Phase 2)
-
-    private func spawnBackgroundTask(for request: MixCreationRequest, media: MixCreationMedia?, modelContext: ModelContext) {
-        let task = Task {
-            // Write raw media to disk in the background (for app-kill recovery)
-            var updatedRequest = request
-            if let media {
-                self.persistRawMedia(request: &updatedRequest, media: media)
-            }
-            await self.process(request: updatedRequest, modelContext: modelContext)
-        }
-        activeTasks[request.mixId] = task
-    }
-
-    /// Write raw media blobs to disk in the background so app-kill recovery works.
-    /// Updates request paths in-place.
     private func persistRawMedia(request: inout MixCreationRequest, media: MixCreationMedia) {
         let mixDir = request.mixId.uuidString
         let dirURL = fileManager.fileURL(for: mixDir)
         try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
 
         func writeIfNeeded(_ data: Data?, name: String, existingPath: String?) -> String? {
-            if existingPath != nil { return existingPath } // already on disk
+            if existingPath != nil { return existingPath }
             guard let data else { return nil }
             let path = "\(mixDir)/\(name)"
             let url = fileManager.fileURL(for: path)
             do { try data.write(to: url); return path } catch { return nil }
         }
 
-        request.rawPhotoPath = writeIfNeeded(media.photoData, name: "raw_photo.jpg", existingPath: request.rawPhotoPath)
-        request.rawVideoPath = writeIfNeeded(media.videoData, name: "raw_video.mp4", existingPath: request.rawVideoPath)
-        request.rawAudioPath = writeIfNeeded(media.audioData, name: "raw_audio.\(request.isAudioFromTTS ? "mp3" : "m4a")", existingPath: request.rawAudioPath)
-        request.rawImportMediaPath = writeIfNeeded(media.importMediaData, name: "raw_import_media.mp4", existingPath: request.rawImportMediaPath)
-        request.rawImportAudioPath = writeIfNeeded(media.importAudioData, name: "raw_import_audio.m4a", existingPath: request.rawImportAudioPath)
+        let mediaExt = media.mediaIsVideo ? "mp4" : "jpg"
+        request.rawMediaPath = writeIfNeeded(media.mediaData, name: "raw_media.\(mediaExt)", existingPath: request.rawMediaPath)
+        request.rawMediaThumbnailPath = writeIfNeeded(media.mediaThumbnailData, name: "media_thumb.jpg", existingPath: request.rawMediaThumbnailPath)
+        request.rawAudioPath = writeIfNeeded(media.audioData, name: "raw_audio.m4a", existingPath: request.rawAudioPath)
         request.rawEmbedOgImagePath = writeIfNeeded(media.embedOgImageData, name: "embed_og.jpg", existingPath: request.rawEmbedOgImagePath)
-        request.rawPhotoThumbnailPath = writeIfNeeded(media.photoThumbnailData, name: "photo_thumb.jpg", existingPath: request.rawPhotoThumbnailPath)
-        request.rawVideoThumbnailPath = writeIfNeeded(media.videoThumbnailData, name: "video_thumb.jpg", existingPath: request.rawVideoThumbnailPath)
-        request.rawImportThumbnailPath = writeIfNeeded(media.importThumbnailData, name: "import_thumb.jpg", existingPath: request.rawImportThumbnailPath)
 
-        // Re-persist updated request.json with new paths
-        let requestPath = "\(mixDir)/request.json"
-        let requestURL = fileManager.fileURL(for: requestPath)
-        if let data = try? JSONEncoder().encode(request) {
-            try? data.write(to: requestURL)
+        if let fileData = media.fileData, let fileName = media.fileName ?? request.fileName {
+            let ext = (fileName as NSString).pathExtension
+            let name = ext.isEmpty ? "raw_file" : "raw_file.\(ext)"
+            request.rawFilePath = writeIfNeeded(fileData, name: name, existingPath: request.rawFilePath)
+            request.fileName = fileName
         }
     }
 
-    private func process(request: MixCreationRequest, modelContext: ModelContext) async {
-        let repo: MixRepository = resolve()
-        let tagRepo: TagRepository = resolve()
+    // MARK: - Process
+
+    private func process(request: MixCreationRequest, context: NSManagedObjectContext) async {
         let mixId = request.mixId
         let mixDir = mixId.uuidString
 
-        // Helper: save compressed data to local MixMedia path for immediate playback
         func saveLocal(_ data: Data, name: String) -> String {
             let path = "\(mixDir)/\(name)"
             let url = fileManager.fileURL(for: path)
@@ -211,323 +75,199 @@ final class MixCreationService {
             return path
         }
 
-        // Track local paths of processed files for step 7
         var localPaths: [String: String] = [:]
 
         do {
-            var payload = CreateMixPayload(type: request.mixType)
-
-            // 1. Compress & upload media (save compressed files locally too)
+            // 1. Compress media & save locally
             switch request.mixType {
-            case .text:
-                payload.textContent = request.textContent
-                if let text = request.textContent, !text.isEmpty {
-                    let ttsData = try await TextToSpeechService.synthesize(text: text)
-                    let ttsUrl = try await repo.uploadMedia(data: ttsData, fileName: "tts.mp3", contentType: "audio/mpeg")
-                    payload.ttsAudioUrl = ttsUrl
-                    localPaths["ttsAudio"] = saveLocal(ttsData, name: "tts.mp3")
-                }
-
-            case .photo:
-                if let path = request.rawPhotoPath, let data = readFile(path) {
-                    let url = try await repo.uploadMedia(data: data, fileName: "image.jpg", contentType: "image/jpeg")
-                    payload.photoUrl = url
-                    localPaths["photo"] = path // raw is fine for photos
-                }
-                if let path = request.rawPhotoThumbnailPath, let data = readFile(path) {
-                    let url = try await repo.uploadMedia(data: data, fileName: "photo_thumb.jpg", contentType: "image/jpeg")
-                    payload.photoThumbnailUrl = url
-                    localPaths["photoThumb"] = path
-                }
-                // AI Summary audio
+            case .note:
+                // Audio is added manually in the editor (via "Add audio" chip).
+                // If the user generated TTS before saving, it arrives via rawAudioPath.
                 if let path = request.rawAudioPath, let data = readFile(path) {
-                    let compressed = try await compressAudio(data: data, fileName: "ai_summary.m4a")
-                    let audioUrl = try await repo.uploadMedia(data: compressed, fileName: "ai_summary.m4a", contentType: "audio/aac")
-                    payload.audioUrl = audioUrl
-                    localPaths["audio"] = saveLocal(compressed, name: "ai_summary.m4a")
+                    localPaths["audio"] = saveLocal(data, name: "tts.mp3")
                 }
 
-            case .video:
-                if let path = request.rawVideoPath, let data = readFile(path) {
-                    let compressed = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: compressed, fileName: "video.mp4", contentType: "video/mp4")
-                    payload.videoUrl = url
-                    localPaths["video"] = saveLocal(compressed, name: "video.mp4")
-                    // Audio: generate silence if user removed audio, otherwise extract/fallback
-                    let audioTrackData: Data
-                    if request.audioRemoved {
-                        let duration = try await videoDuration(from: data)
-                        audioTrackData = try generateSilence(duration: duration)
-                    } else {
-                        audioTrackData = try await extractOrGenerateSilence(from: data)
+            case .media:
+                if request.mediaIsVideo {
+                    if let path = request.rawMediaPath, let data = readFile(path) {
+                        let compressed = try await compressVideo(data: data)
+                        localPaths["media"] = saveLocal(compressed, name: "media.mp4")
+                        let audioTrackData: Data
+                        if request.audioRemoved {
+                            let duration = try await videoDuration(from: data)
+                            audioTrackData = try generateSilence(duration: duration)
+                        } else {
+                            audioTrackData = try await extractOrGenerateSilence(from: data)
+                        }
+                        let compressedAudio = try await compressAudio(data: audioTrackData, fileName: "video_audio.m4a")
+                        localPaths["audio"] = saveLocal(compressedAudio, name: "video_audio.m4a")
                     }
-                    let compressedAudio = try await compressAudio(data: audioTrackData, fileName: "video_audio.m4a")
-                    let audioUrl = try await repo.uploadMedia(data: compressedAudio, fileName: "video_audio.m4a", contentType: "audio/aac")
-                    payload.audioUrl = audioUrl
-                    localPaths["audio"] = saveLocal(compressedAudio, name: "video_audio.m4a")
-                }
-                if let path = request.rawVideoThumbnailPath, let data = readFile(path) {
-                    let url = try await repo.uploadMedia(data: data, fileName: "video_thumb.jpg", contentType: "image/jpeg")
-                    payload.videoThumbnailUrl = url
-                    localPaths["videoThumb"] = path
-                }
-
-            case .import:
-                payload.importSourceUrl = request.importSourceUrl
-                var importAudioData: Data?
-
-                if let path = request.rawImportMediaPath, let data = readFile(path) {
-                    let compressed = try await compressVideo(data: data)
-                    let url = try await repo.uploadMedia(data: compressed, fileName: "import_video.mp4", contentType: "video/mp4")
-                    payload.importMediaUrl = url
-                    localPaths["importMedia"] = saveLocal(compressed, name: "import_video.mp4")
-                    // Audio: generate silence if user removed audio, otherwise extract/fallback
-                    if request.audioRemoved {
-                        let duration = try await videoDuration(from: data)
-                        importAudioData = try generateSilence(duration: duration)
-                    } else if request.rawImportAudioPath == nil {
-                        importAudioData = try await extractOrGenerateSilence(from: data)
+                    if let path = request.rawMediaThumbnailPath {
+                        localPaths["mediaThumb"] = path
                     }
-                }
-                if let path = request.rawImportThumbnailPath, let data = readFile(path) {
-                    let url = try await repo.uploadMedia(data: data, fileName: "import_thumb.jpg", contentType: "image/jpeg")
-                    payload.importThumbnailUrl = url
-                    localPaths["importThumb"] = path
-                }
-                if let path = request.rawImportAudioPath, let data = readFile(path) {
-                    importAudioData = data
-                }
-                if var audioData = importAudioData {
-                    audioData = try await compressAudio(data: audioData, fileName: "import_audio.m4a")
-                    let url = try await repo.uploadMedia(data: audioData, fileName: "import_audio.m4a", contentType: "audio/aac")
-                    payload.importAudioUrl = url
-                    localPaths["importAudio"] = saveLocal(audioData, name: "import_audio.m4a")
-                }
-
-            case .embed:
-                payload.embedUrl = request.embedUrl
-                let ogMeta: OGMetadata? = {
-                    guard let data = request.embedOgJson else { return nil }
-                    return try? JSONDecoder().decode(OGMetadata.self, from: data)
-                }()
-                if let path = request.rawEmbedOgImagePath, let imageData = readFile(path) {
-                    let imageUrl = try await repo.uploadMedia(data: imageData, fileName: "embed_og.jpg", contentType: "image/jpeg")
-                    payload.embedOg = OGMetadata(
-                        title: ogMeta?.title,
-                        description: ogMeta?.description,
-                        imageUrl: imageUrl,
-                        host: ogMeta?.host ?? ""
-                    )
-                    localPaths["embedOgImage"] = path
                 } else {
-                    payload.embedOg = OGMetadata(
-                        title: ogMeta?.title,
-                        description: ogMeta?.description,
-                        imageUrl: nil,
-                        host: ogMeta?.host ?? ""
-                    )
+                    if let path = request.rawMediaPath {
+                        localPaths["media"] = path
+                    }
+                    if let path = request.rawMediaThumbnailPath {
+                        localPaths["mediaThumb"] = path
+                    }
+                    // AI Summary audio
+                    if let path = request.rawAudioPath, let data = readFile(path) {
+                        let compressed = try await compressAudio(data: data, fileName: "ai_summary.m4a")
+                        localPaths["audio"] = saveLocal(compressed, name: "ai_summary.m4a")
+                    }
                 }
-                // AI Summary audio
+
+            case .voice:
                 if let path = request.rawAudioPath, let data = readFile(path) {
+                    let compressed = try await compressAudio(data: data, fileName: "voice.m4a")
+                    localPaths["audio"] = saveLocal(compressed, name: "voice.m4a")
+                }
+
+            case .canvas:
+                // Embed widget OG image
+                if let path = request.rawEmbedOgImagePath {
+                    localPaths["embedOgImage"] = path
+                }
+                // File widget — store the file itself
+                if let path = request.rawFilePath {
+                    localPaths["file"] = path
+                }
+                // File widget — check if audio/video file
+                let fileExt = ((request.fileName ?? "") as NSString).pathExtension.lowercased()
+                let audioExts = Set(["mp3", "m4a", "wav", "aac", "flac", "ogg"])
+                let videoExts = Set(["mp4", "mov", "m4v"])
+
+                if audioExts.contains(fileExt), let path = request.rawFilePath, let data = readFile(path) {
+                    let compressed = try await compressAudio(data: data, fileName: request.fileName ?? "audio.m4a")
+                    localPaths["audio"] = saveLocal(compressed, name: "file_audio.m4a")
+                } else if videoExts.contains(fileExt), let path = request.rawFilePath, let data = readFile(path) {
+                    let audioData = try await extractOrGenerateSilence(from: data)
+                    let compressed = try await compressAudio(data: audioData, fileName: "file_audio.m4a")
+                    localPaths["audio"] = saveLocal(compressed, name: "file_audio.m4a")
+                } else if let path = request.rawAudioPath, let data = readFile(path) {
+                    // AI summary audio added in editor
                     let compressed = try await compressAudio(data: data, fileName: "ai_summary.m4a")
-                    let audioUrl = try await repo.uploadMedia(data: compressed, fileName: "ai_summary.m4a", contentType: "audio/aac")
-                    payload.audioUrl = audioUrl
                     localPaths["audio"] = saveLocal(compressed, name: "ai_summary.m4a")
                 }
 
-            case .audio:
-                if let path = request.rawAudioPath, var data = readFile(path) {
-                    if request.isAudioFromTTS {
-                        let url = try await repo.uploadMedia(data: data, fileName: "audio.mp3", contentType: "audio/mpeg")
-                        payload.audioUrl = url
-                        localPaths["audio"] = path
-                    } else {
-                        data = try await compressAudio(data: data, fileName: request.audioFileName ?? "audio.m4a")
-                        let url = try await repo.uploadMedia(data: data, fileName: "audio.m4a", contentType: "audio/aac")
-                        payload.audioUrl = url
-                        localPaths["audio"] = saveLocal(data, name: "audio.m4a")
+            case .`import`:
+                if request.mediaIsVideo {
+                    // Video import — same pipeline as .media video
+                    if let path = request.rawMediaPath, let data = readFile(path) {
+                        let compressed = try await compressVideo(data: data)
+                        localPaths["media"] = saveLocal(compressed, name: "media.mp4")
+                        let audioTrackData = try await extractOrGenerateSilence(from: data)
+                        let compressedAudio = try await compressAudio(data: audioTrackData, fileName: "video_audio.m4a")
+                        localPaths["audio"] = saveLocal(compressedAudio, name: "video_audio.m4a")
+                    }
+                    if let path = request.rawMediaThumbnailPath {
+                        localPaths["mediaThumb"] = path
+                    }
+                } else {
+                    // Audio-only import — extract audio from MP4 container
+                    if let path = request.rawMediaPath, let data = readFile(path) {
+                        let audioData = try await extractOrGenerateSilence(from: data)
+                        let compressed = try await compressAudio(data: audioData, fileName: "import_audio.m4a")
+                        localPaths["audio"] = saveLocal(compressed, name: "import_audio.m4a")
                     }
                 }
             }
-
-            try Task.checkCancellation()
 
             // 2. Generate searchable content (non-fatal)
-            do {
-                switch request.mixType {
-                case .text:
-                    if let text = request.textContent, !text.isEmpty {
-                        payload.content = ContentService.fromText(text)
-                    }
-                case .photo:
-                    if let path = request.rawPhotoPath, let data = readFile(path) {
-                        payload.content = try await ContentService.fromImage(imageData: data)
-                    }
-                case .video:
-                    if let path = request.rawVideoPath, let data = readFile(path) {
-                        let audioTrack = try await extractAudioFromVideo(data: data)
-                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "video_audio.m4a")
-                    }
-                case .import:
-                    if let path = request.rawImportAudioPath, let data = readFile(path) {
-                        payload.content = try await ContentService.fromAudio(data: data, fileName: "import_audio.m4a")
-                    } else if let path = request.rawImportMediaPath, let data = readFile(path) {
-                        let audioTrack = try await extractAudioFromVideo(data: data)
-                        payload.content = try await ContentService.fromAudio(data: audioTrack, fileName: "import_audio.m4a")
-                    }
-                case .audio:
-                    if let path = request.rawAudioPath, let data = readFile(path), !request.isAudioFromTTS {
-                        let name = request.audioFileName ?? "audio.m4a"
-                        let ct = name.hasSuffix(".mp3") ? "audio/mpeg" : "audio/m4a"
-                        payload.content = try await ContentService.fromAudio(data: data, fileName: name, contentType: ct)
-                    }
-                case .embed:
-                    let ogMeta: OGMetadata? = {
-                        guard let data = request.embedOgJson else { return nil }
-                        return try? JSONDecoder().decode(OGMetadata.self, from: data)
-                    }()
-                    payload.content = ContentService.fromEmbed(og: ogMeta, url: request.embedUrl ?? "")
+            var searchContent: String?
+            switch request.mixType {
+            case .note:
+                if let text = request.textContent, !text.isEmpty {
+                    searchContent = ContentService.fromText(text)
                 }
-            } catch {}
-
-            try Task.checkCancellation()
-
-            // 3. Set title if provided
-            let trimmedTitle = (request.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedTitle.isEmpty {
-                payload.title = trimmedTitle
-            }
-
-            try Task.checkCancellation()
-
-            // 4. Upload screenshot
-            if let path = request.screenshotPath, let screenshotData = readFile(path) {
-                let screenshotUrl = try await repo.uploadMedia(data: screenshotData, fileName: "screenshot.jpg", contentType: "image/jpeg")
-                payload.screenshotUrl = screenshotUrl
-            }
-            payload.previewScaleY = request.previewScaleY
-            payload.gradientTop = request.gradientTop
-            payload.gradientBottom = request.gradientBottom
-
-            // 5. Insert into Supabase
-            let createdMix = try await repo.createMix(payload)
-
-            // 6. Set tags
-            let tagIds = Set(request.selectedTagIds)
-            if !tagIds.isEmpty {
-                try? await tagRepo.setTagsForMix(mixId: createdMix.id, tagIds: tagIds)
-            }
-
-            try Task.checkCancellation()
-
-            // 7. Update LocalMix — set remote URLs AND set local paths to compressed files
-            //    so the mix is immediately playable without waiting for SyncEngine.
-            if let local = fetchLocalMix(mixId: mixId, modelContext: modelContext) {
-                local.updateFromRemote(createdMix)
-
-                // Set local paths to compressed/processed files saved during step 1
-                switch request.mixType {
-                case .text:
-                    local.localTtsAudioPath = localPaths["ttsAudio"]
-                case .photo:
-                    local.localPhotoPath = localPaths["photo"]
-                    local.localPhotoThumbnailPath = localPaths["photoThumb"]
-                case .video:
-                    local.localVideoPath = localPaths["video"]
-                    local.localVideoThumbnailPath = localPaths["videoThumb"]
-                    local.localAudioPath = localPaths["audio"]
-                case .import:
-                    local.localImportMediaPath = localPaths["importMedia"]
-                    local.localImportThumbnailPath = localPaths["importThumb"]
-                    local.localImportAudioPath = localPaths["importAudio"]
-                case .embed:
-                    local.localEmbedOgImagePath = localPaths["embedOgImage"]
-                case .audio:
-                    local.localAudioPath = localPaths["audio"]
-                }
-                local.localScreenshotPath = request.screenshotPath
-
-                // Verify local files actually exist before marking as done.
-                // If any required file is missing, stay in "creating" state so the
-                // card remains non-tappable and SyncEngine will download on next sync.
-                let allLocalFilesExist = verifyLocalFiles(local: local, mixType: request.mixType)
-                if allLocalFilesExist {
-                    local.creationStatus = nil
-                    local.creationRequestPath = nil
-                    local.isSynced = true
+            case .media:
+                if request.mediaIsVideo {
+                    searchContent = ContentService.fromVideo()
                 } else {
-                    // Files were supposedly saved but don't exist — mark failed so user can retry
-                    local.creationStatus = "failed"
+                    searchContent = ContentService.fromImage()
                 }
-                try? modelContext.save()
+            case .voice:
+                if let audioPath = localPaths["audio"] {
+                    let audioURL = fileManager.fileURL(for: audioPath)
+                    searchContent = await ContentService.fromAudio(fileURL: audioURL)
+                }
+            case .canvas:
+                // Check widgets for searchable content
+                let widgets = request.widgets ?? []
+                if let ew = widgets.first(where: { $0.type == .embed }) {
+                    searchContent = ContentService.fromEmbed(og: ew.embedOg, url: ew.embedUrl ?? "")
+                } else if let fw = widgets.first(where: { $0.type == .file }), let name = fw.fileName {
+                    searchContent = ContentService.fromFile(name: name)
+                }
+
+            case .`import`:
+                searchContent = ContentService.fromImport(sourceUrl: request.sourceUrl ?? "", title: request.title)
             }
 
-            // 8. Clean up request.json
-            let requestPath = "\(mixId.uuidString)/request.json"
-            let requestURL = fileManager.fileURL(for: requestPath)
-            try? FileManager.default.removeItem(at: requestURL)
+            // 3. Create LocalMix with all processed local paths (on context queue)
+            let paths = localPaths
+            let widgetsData: Data? = {
+                guard let widgets = request.widgets, !widgets.isEmpty else { return nil }
+                return try? JSONEncoder().encode(widgets)
+            }()
 
-            activeTasks[mixId] = nil
-            NotificationCenter.default.post(name: .mixCreationStatusChanged, object: nil)
+            try await context.perform {
+                let local = LocalMix(mixId: mixId, type: request.mixType.rawValue, createdAt: request.createdAt, context: context)
 
-        } catch is CancellationError {
-            // Task was cancelled (user discarded) — do nothing
-            activeTasks[mixId] = nil
+                let trimmedTitle = (request.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedTitle.isEmpty {
+                    local.title = trimmedTitle
+                }
+
+                local.textContent = request.textContent
+                local.embedUrl = request.embedUrl
+                local.searchContent = searchContent
+                local.previewCropXDouble = request.previewCropX
+                local.previewCropYDouble = request.previewCropY
+                local.previewCropScaleDouble = request.previewCropScale
+                local.gradientTop = request.gradientTop
+                local.gradientBottom = request.gradientBottom
+                local.mediaIsVideo = request.mediaIsVideo
+                local.localScreenshotPath = request.screenshotPath
+                local.screenshotBucket = request.screenshotBucket
+
+                if let ogData = request.embedOgJson {
+                    local.embedOgJson = ogData
+                }
+
+                local.localMediaPath = paths["media"] ?? paths["file"] ?? request.rawMediaPath
+                local.localMediaThumbnailPath = paths["mediaThumb"] ?? request.rawMediaThumbnailPath
+                local.localEmbedOgImagePath = paths["embedOgImage"] ?? request.rawEmbedOgImagePath
+                local.localAudioPath = paths["audio"]
+                local.fileName = request.fileName
+                local.widgetsJson = widgetsData
+                local.sourceUrl = request.sourceUrl
+
+                // 4. Save LocalMixTag rows
+                for tagId in request.selectedTagIds {
+                    _ = LocalMixTag(mixId: request.mixId, tagId: tagId, context: context)
+                }
+
+                try context.save()
+            }
+
         } catch {
-            // Mark as failed
-            if let local = fetchLocalMix(mixId: mixId, modelContext: modelContext) {
-                local.creationStatus = "failed"
-                try? modelContext.save()
-            }
-            activeTasks[mixId] = nil
-            NotificationCenter.default.post(name: .mixCreationStatusChanged, object: nil)
+            // Creation failed — clean up mix directory
+            let dirURL = fileManager.fileURL(for: mixDir)
+            try? FileManager.default.removeItem(at: dirURL)
         }
     }
 
     // MARK: - Helpers
-
-    /// Check that all required local media files actually exist on disk.
-    private func verifyLocalFiles(local: LocalMix, mixType: MixType) -> Bool {
-        func exists(_ path: String?) -> Bool {
-            guard let path else { return false }
-            return fileManager.fileExists(at: path)
-        }
-        func optionalExists(_ path: String?, remote: String?) -> Bool {
-            // If there's no remote URL, the file is optional (e.g. no TTS for empty text)
-            guard remote != nil else { return true }
-            return exists(path)
-        }
-
-        let screenshotOk = exists(local.localScreenshotPath)
-
-        switch mixType {
-        case .text:
-            return exists(local.localTtsAudioPath) && screenshotOk
-        case .photo:
-            return exists(local.localPhotoPath) && screenshotOk
-        case .video:
-            return exists(local.localVideoPath) && exists(local.localAudioPath) && screenshotOk
-        case .import:
-            // Audio-only imports have no video file — just need audio
-            let hasMedia = exists(local.localImportMediaPath) || exists(local.localImportAudioPath)
-            return hasMedia && screenshotOk
-        case .embed:
-            return screenshotOk
-        case .audio:
-            return exists(local.localAudioPath) && screenshotOk
-        }
-    }
-
-    private func fetchLocalMix(mixId: UUID, modelContext: ModelContext) -> LocalMix? {
-        try? modelContext.fetch(FetchDescriptor<LocalMix>()).first(where: { $0.mixId == mixId })
-    }
 
     private func readFile(_ relativePath: String) -> Data? {
         let url = fileManager.fileURL(for: relativePath)
         return try? Data(contentsOf: url)
     }
 
-    // MARK: - Media Compression (moved from CreateMixViewModel)
+    // MARK: - Media Compression
 
     private func compressVideo(data: Data) async throws -> Data {
         let inputURL = FileManager.default.temporaryDirectory

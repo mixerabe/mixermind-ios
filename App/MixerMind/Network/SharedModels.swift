@@ -3,59 +3,76 @@ import Foundation
 // MARK: - Mix Type
 
 enum MixType: String, Codable, Equatable {
-    case text
-    case photo
-    case video
-    case `import`
+    case note       // was "text" — plain text note
+    case media      // photo or video capture / library pick
+    case voice      // voice recording
+    case canvas     // gradient background (+ optional widgets on top)
+    case `import`   // Instagram/YouTube video or audio import
+}
+
+// MARK: - Widget
+
+enum MixWidgetType: String, Codable, Hashable {
     case embed
-    case audio
+    case file
+}
+
+struct MixWidget: Codable, Hashable, Identifiable {
+    let id: UUID
+    let type: MixWidgetType
+    // Position (for future drag editor)
+    var x: Double = 0.5
+    var y: Double = 0.5
+    // Content
+    var embedUrl: String?
+    var embedOg: OGMetadata?
+    var fileName: String?
+    var fileLocalPath: String?
 }
 
 // MARK: - Mix
 
-struct Mix: Codable, Identifiable, Hashable {
+struct Mix: Identifiable, Hashable {
     let id: UUID
     let type: MixType
     let createdAt: Date
-    let title: String?
+    var title: String?
     var tags: [Tag] = []
-    var creationStatus: String? = nil  // Local-only display property (not in CodingKeys)
 
     // Text
     let textContent: String?
-    let ttsAudioUrl: String?
 
-    // Photo
-    let photoUrl: String?
-    let photoThumbnailUrl: String?
+    // Audio (unified — TTS, voice recording, AI summary, silence)
+    var audioUrl: String?
 
-    // Video
-    let videoUrl: String?
-    let videoThumbnailUrl: String?
+    // Media (photo or video)
+    let mediaUrl: String?
+    let mediaThumbnailUrl: String?
+    let mediaIsVideo: Bool
 
-    // Import
-    let importSourceUrl: String?
-    let importMediaUrl: String?
-    let importThumbnailUrl: String?
-    let importAudioUrl: String?
-
-    // Embed
-    let embedUrl: String?
-    let embedOg: OGMetadata?
-
-    // Audio
-    let audioUrl: String?
+    // Widgets (embed, file — layered on canvas)
+    var widgets: [MixWidget]
 
     // Search content (AI-generated description / transcript)
     let content: String?
 
     // Screenshot preview
     let screenshotUrl: String?
-    let previewScaleY: Double?
+    let previewCropX: Double?      // 0.0 = left, 0.5 = center, 1.0 = right
+    let previewCropY: Double?      // 0.0 = top, 0.5 = center, 1.0 = bottom
+    let previewCropScale: Double?  // Zoom factor (1.0 = no crop, 2.0 = show half)
 
     // Gradient background
     let gradientTop: String?
     let gradientBottom: String?
+
+    // Import source
+    let sourceUrl: String?
+
+    // Text width bucket for note screenshots
+    let screenshotBucket: String?
+
+    var textBucket: ScreenshotService.TextBucket? { .init(stored: screenshotBucket) }
 
     init(
         id: UUID,
@@ -64,23 +81,20 @@ struct Mix: Codable, Identifiable, Hashable {
         title: String? = nil,
         tags: [Tag] = [],
         textContent: String? = nil,
-        ttsAudioUrl: String? = nil,
-        photoUrl: String? = nil,
-        photoThumbnailUrl: String? = nil,
-        videoUrl: String? = nil,
-        videoThumbnailUrl: String? = nil,
-        importSourceUrl: String? = nil,
-        importMediaUrl: String? = nil,
-        importThumbnailUrl: String? = nil,
-        importAudioUrl: String? = nil,
-        embedUrl: String? = nil,
-        embedOg: OGMetadata? = nil,
         audioUrl: String? = nil,
+        mediaUrl: String? = nil,
+        mediaThumbnailUrl: String? = nil,
+        mediaIsVideo: Bool = false,
+        widgets: [MixWidget] = [],
         content: String? = nil,
         screenshotUrl: String? = nil,
-        previewScaleY: Double? = nil,
+        previewCropX: Double? = nil,
+        previewCropY: Double? = nil,
+        previewCropScale: Double? = nil,
         gradientTop: String? = nil,
-        gradientBottom: String? = nil
+        gradientBottom: String? = nil,
+        sourceUrl: String? = nil,
+        screenshotBucket: String? = nil
     ) {
         self.id = id
         self.type = type
@@ -88,46 +102,28 @@ struct Mix: Codable, Identifiable, Hashable {
         self.title = title
         self.tags = tags
         self.textContent = textContent
-        self.ttsAudioUrl = ttsAudioUrl
-        self.photoUrl = photoUrl
-        self.photoThumbnailUrl = photoThumbnailUrl
-        self.videoUrl = videoUrl
-        self.videoThumbnailUrl = videoThumbnailUrl
-        self.importSourceUrl = importSourceUrl
-        self.importMediaUrl = importMediaUrl
-        self.importThumbnailUrl = importThumbnailUrl
-        self.importAudioUrl = importAudioUrl
-        self.embedUrl = embedUrl
-        self.embedOg = embedOg
         self.audioUrl = audioUrl
+        self.mediaUrl = mediaUrl
+        self.mediaThumbnailUrl = mediaThumbnailUrl
+        self.mediaIsVideo = mediaIsVideo
+        self.widgets = widgets
         self.content = content
         self.screenshotUrl = screenshotUrl
-        self.previewScaleY = previewScaleY
+        self.previewCropX = previewCropX
+        self.previewCropY = previewCropY
+        self.previewCropScale = previewCropScale
         self.gradientTop = gradientTop
         self.gradientBottom = gradientBottom
+        self.sourceUrl = sourceUrl
+        self.screenshotBucket = screenshotBucket
     }
 
-    enum CodingKeys: String, CodingKey {
-        case id, type, title, content // tags excluded — populated locally
-        case createdAt = "created_at"
-        case textContent = "text_content"
-        case ttsAudioUrl = "tts_audio_url"
-        case photoUrl = "photo_url"
-        case photoThumbnailUrl = "photo_thumbnail_url"
-        case videoUrl = "video_url"
-        case videoThumbnailUrl = "video_thumbnail_url"
-        case importSourceUrl = "import_source_url"
-        case importMediaUrl = "import_media_url"
-        case importThumbnailUrl = "import_thumbnail_url"
-        case importAudioUrl = "import_audio_url"
-        case embedUrl = "embed_url"
-        case embedOg = "embed_og"
-        case audioUrl = "audio_url"
-        case screenshotUrl = "screenshot_url"
-        case previewScaleY = "preview_scale_y"
-        case gradientTop = "gradient_top"
-        case gradientBottom = "gradient_bottom"
-    }
+    // Convenience accessors for first widget of type
+    var embedWidget: MixWidget? { widgets.first { $0.type == .embed } }
+    var fileWidget: MixWidget? { widgets.first { $0.type == .file } }
+    var embedUrl: String? { embedWidget?.embedUrl }
+    var embedOg: OGMetadata? { embedWidget?.embedOg }
+    var fileName: String? { fileWidget?.fileName }
 }
 
 struct OGMetadata: Codable, Hashable {
@@ -144,121 +140,12 @@ struct OGMetadata: Codable, Hashable {
     }
 }
 
-// MARK: - Create Mix Payload
-
-/// pgvector expects a string like "[0.1,0.2,...]" via PostgREST
-struct PgVector: Encodable {
-    let values: [Double]
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        let str = "[" + values.map { String($0) }.joined(separator: ",") + "]"
-        try container.encode(str)
-    }
-}
-
-struct CreateMixPayload: Encodable {
-    let type: MixType
-    var title: String? = nil
-    var textContent: String? = nil
-    var ttsAudioUrl: String? = nil
-    var photoUrl: String? = nil
-    var photoThumbnailUrl: String? = nil
-    var videoUrl: String? = nil
-    var videoThumbnailUrl: String? = nil
-    var importSourceUrl: String? = nil
-    var importMediaUrl: String? = nil
-    var importThumbnailUrl: String? = nil
-    var importAudioUrl: String? = nil
-    var embedUrl: String? = nil
-    var embedOg: OGMetadata? = nil
-    var audioUrl: String? = nil
-    var screenshotUrl: String? = nil
-    var previewScaleY: Double? = nil
-    var gradientTop: String? = nil
-    var gradientBottom: String? = nil
-    var content: String? = nil
-    var contentEmbedding: PgVector? = nil
-
-    enum CodingKeys: String, CodingKey {
-        case type, title, content
-        case textContent = "text_content"
-        case ttsAudioUrl = "tts_audio_url"
-        case photoUrl = "photo_url"
-        case photoThumbnailUrl = "photo_thumbnail_url"
-        case videoUrl = "video_url"
-        case videoThumbnailUrl = "video_thumbnail_url"
-        case importSourceUrl = "import_source_url"
-        case importMediaUrl = "import_media_url"
-        case importThumbnailUrl = "import_thumbnail_url"
-        case importAudioUrl = "import_audio_url"
-        case embedUrl = "embed_url"
-        case embedOg = "embed_og"
-        case audioUrl = "audio_url"
-        case screenshotUrl = "screenshot_url"
-        case previewScaleY = "preview_scale_y"
-        case gradientTop = "gradient_top"
-        case gradientBottom = "gradient_bottom"
-        case contentEmbedding = "content_embedding"
-    }
-}
-
-struct UpdateMixPayload: Encodable {
-    var title: String? = nil
-    var textContent: String? = nil
-    var ttsAudioUrl: String? = nil
-    var photoUrl: String? = nil
-    var photoThumbnailUrl: String? = nil
-    var videoUrl: String? = nil
-    var videoThumbnailUrl: String? = nil
-    var importSourceUrl: String? = nil
-    var importMediaUrl: String? = nil
-    var importThumbnailUrl: String? = nil
-    var importAudioUrl: String? = nil
-    var embedUrl: String? = nil
-    var embedOg: OGMetadata? = nil
-    var audioUrl: String? = nil
-    var screenshotUrl: String? = nil
-    var previewScaleY: Double? = nil
-    var gradientTop: String? = nil
-    var gradientBottom: String? = nil
-    var content: String? = nil
-    var contentEmbedding: PgVector? = nil
-
-    enum CodingKeys: String, CodingKey {
-        case title, content
-        case textContent = "text_content"
-        case ttsAudioUrl = "tts_audio_url"
-        case photoUrl = "photo_url"
-        case photoThumbnailUrl = "photo_thumbnail_url"
-        case videoUrl = "video_url"
-        case videoThumbnailUrl = "video_thumbnail_url"
-        case importSourceUrl = "import_source_url"
-        case importMediaUrl = "import_media_url"
-        case importThumbnailUrl = "import_thumbnail_url"
-        case importAudioUrl = "import_audio_url"
-        case embedUrl = "embed_url"
-        case embedOg = "embed_og"
-        case audioUrl = "audio_url"
-        case screenshotUrl = "screenshot_url"
-        case previewScaleY = "preview_scale_y"
-        case gradientTop = "gradient_top"
-        case gradientBottom = "gradient_bottom"
-        case contentEmbedding = "content_embedding"
-    }
-}
-
 // MARK: - Tags
 
-struct Tag: Codable, Identifiable, Hashable {
+struct Tag: Identifiable, Hashable {
     let id: UUID
     let name: String
     let createdAt: Date
-
-    enum CodingKeys: String, CodingKey {
-        case id, name
-        case createdAt = "created_at"
-    }
 }
 
 struct TagWithFrequency: Identifiable, Hashable {
@@ -268,27 +155,11 @@ struct TagWithFrequency: Identifiable, Hashable {
     var name: String { tag.name }
 }
 
-struct MixTagRow: Codable {
-    let mixId: UUID
-    let tagId: UUID
-
-    enum CodingKeys: String, CodingKey {
-        case mixId = "mix_id"
-        case tagId = "tag_id"
-    }
-}
-
 // MARK: - Saved Views
 
-struct SavedView: Codable, Identifiable, Hashable {
+struct SavedView: Identifiable, Hashable {
     let id: UUID
     let name: String
     let tagIds: [UUID]
     let createdAt: Date
-
-    enum CodingKeys: String, CodingKey {
-        case id, name
-        case tagIds = "tag_ids"
-        case createdAt = "created_at"
-    }
 }

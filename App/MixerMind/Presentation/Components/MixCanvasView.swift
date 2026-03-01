@@ -9,12 +9,14 @@ struct MixCanvasView: View {
     let mediaUrl: String?
     let thumbnailUrl: String?
     let videoPlayer: AVPlayer?
-    let embedUrl: String?
-    let embedOg: OGMetadata?
+    var widgets: [MixWidget] = []
 
     // Gradient background
     var gradientTop: String?
     var gradientBottom: String?
+
+    // Fixed-width container for note text (matches screenshot bucket)
+    var noteContainerWidth: CGFloat? = nil
 
     let onEmbedTap: (() -> Void)?
 
@@ -37,6 +39,7 @@ struct MixCanvasView: View {
     // Placeholder tap (create mode empty text)
     let onPlaceholderTap: (() -> Void)?
 
+    var isEditing: Bool = false
     var isMinimized: Bool = false
     var dragProgress: CGFloat = 0
 
@@ -45,27 +48,35 @@ struct MixCanvasView: View {
 
     private static let darkBg = Color.blue
 
-    private var backgroundGradient: some View {
-        LinearGradient(
-            colors: [
-                Color(hex: gradientTop ?? "#1a1a2e"),
-                Color(hex: gradientBottom ?? "#16213e")
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    private var embedWidget: MixWidget? { widgets.first { $0.type == .embed } }
+    private var fileWidget: MixWidget? { widgets.first { $0.type == .file } }
+
+    @ViewBuilder
+    private var background: some View {
+        if mixType == .media || mixType == .import {
+            Color.black
+        } else {
+            LinearGradient(
+                colors: [
+                    Color(hex: gradientTop ?? "#1a1a2e"),
+                    Color(hex: gradientBottom ?? "#16213e")
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
     }
 
     var body: some View {
         ZStack {
-            backgroundGradient
+            background
 
             // Content layer — centered
             contentLayer
 
-            // Embed card
-            if let url = embedUrl, !url.isEmpty {
-                EmbedCardView(urlString: url, og: embedOg, onTap: onEmbedTap)
+            // Embed widget card
+            if let ew = embedWidget, let url = ew.embedUrl, !url.isEmpty {
+                EmbedCardView(urlString: url, og: ew.embedOg, onTap: onEmbedTap)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -75,14 +86,16 @@ struct MixCanvasView: View {
             onCanvasTap?()
         }
         .overlay {
-            if isPaused, hasPlayback, !isMinimized {
+            if !isEditing, isPaused, hasPlayback, !isMinimized {
                 pausedOverlay
                     .opacity(Double(max(1 - dragProgress * 3, 0)))
             }
         }
         // Progress bar on top of everything so scrubbing works even when paused
         .overlay(alignment: .bottom) {
-            progressBar
+            if !isEditing {
+                progressBar
+            }
         }
     }
 
@@ -91,21 +104,23 @@ struct MixCanvasView: View {
     @ViewBuilder
     private var contentLayer: some View {
         switch mixType {
-        case .video, .import:
-            videoPreview
-            if let player = videoPlayer {
-                GeometryReader { geo in
-                    LoopingVideoView(player: player, gravity: .resizeAspect)
-                        .frame(width: geo.size.width, height: geo.size.height)
+        case .media:
+            if videoPlayer != nil {
+                // Video media
+                videoPreview
+                if let player = videoPlayer {
+                    GeometryReader { geo in
+                        LoopingVideoView(player: player, gravity: .resizeAspect)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                    }
                 }
+            } else {
+                // Photo media
+                photoContent
             }
             if hasText { textOverlay }
 
-        case .photo:
-            photoContent
-            if hasText { textOverlay }
-
-        case .audio:
+        case .voice:
             VStack(spacing: 24) {
                 AudioWaveView(isPlaying: !isPaused)
                 if playbackDuration > 0 {
@@ -119,10 +134,52 @@ struct MixCanvasView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if hasText { textOverlay }
 
-        case .embed:
+        case .canvas:
+            // File widget overlay
+            if let fw = fileWidget {
+                VStack(spacing: 16) {
+                    Image(systemName: "doc.fill")
+                        .font(.system(size: 56))
+                        .foregroundStyle(.white.opacity(0.5))
+                    if let name = fw.fileName, !name.isEmpty {
+                        Text(name)
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             if hasText { textOverlay }
 
-        case .text:
+        case .`import`:
+            if videoPlayer != nil {
+                videoPreview
+                if let player = videoPlayer {
+                    GeometryReader { geo in
+                        LoopingVideoView(player: player, gravity: .resizeAspect)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                    }
+                }
+            } else {
+                // Audio-only import — waveform on black bg
+                VStack(spacing: 24) {
+                    AudioWaveView(isPlaying: !isPaused)
+                    if playbackDuration > 0 {
+                        Text(formatTime(playbackProgress * playbackDuration))
+                            .font(.system(size: 48, weight: .thin, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .contentTransition(.numericText())
+                            .animation(.linear(duration: 0.1), value: playbackProgress)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if hasText { textOverlay }
+
+        case .note:
             if hasText {
                 noteTextView
             } else if let action = onPlaceholderTap {
@@ -295,7 +352,7 @@ struct MixCanvasView: View {
         GeometryReader { container in
             let containerHeight = container.size.height
 
-            Text(textContent)
+            let textBlock = Text(textContent)
                 .font(.system(size: 17, weight: .regular))
                 .lineSpacing(6)
                 .multilineTextAlignment(.leading)
@@ -305,22 +362,32 @@ struct MixCanvasView: View {
                 .padding(.top, 120)
                 .padding(.bottom, 200)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    GeometryReader { textGeo in
-                        Color.clear.preference(
-                            key: TextHeightKey.self,
-                            value: textGeo.size.height
-                        )
-                    }
-                )
-                .offset(y: noteScrollOffset(
-                    contentHeight: textContentHeight,
-                    containerHeight: containerHeight
-                ))
-                .onPreferenceChange(TextHeightKey.self) { height in
-                    textContentHeight = height
+
+            Group {
+                if let fixedWidth = noteContainerWidth {
+                    textBlock
+                        .frame(width: fixedWidth + 48, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                } else {
+                    textBlock
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            }
+            .background(
+                GeometryReader { textGeo in
+                    Color.clear.preference(
+                        key: TextHeightKey.self,
+                        value: textGeo.size.height
+                    )
+                }
+            )
+            .offset(y: noteScrollOffset(
+                contentHeight: textContentHeight,
+                containerHeight: containerHeight
+            ))
+            .onPreferenceChange(TextHeightKey.self) { height in
+                textContentHeight = height
+            }
         }
         .clipped()
     }

@@ -7,32 +7,38 @@ struct MixCanvasContent: View {
     let mixType: MixType
     let textContent: String
     let mediaThumbnail: UIImage?
-    var embedUrl: String? = nil
-    var embedOg: OGMetadata? = nil
+    var widgets: [MixWidget] = []
     var embedImage: UIImage? = nil
     var gradientTop: String? = nil
     var gradientBottom: String? = nil
 
     private var hasText: Bool { !textContent.isEmpty }
-    private var hasEmbed: Bool { !(embedUrl ?? "").isEmpty }
+    private var embedWidget: MixWidget? { widgets.first { $0.type == .embed } }
+    private var fileWidget: MixWidget? { widgets.first { $0.type == .file } }
 
-    private var backgroundGradient: some View {
-        LinearGradient(
-            colors: [
-                Color(hex: gradientTop ?? "#1a1a2e"),
-                Color(hex: gradientBottom ?? "#16213e")
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    private var background: some View {
+        Group {
+            if mixType == .media || mixType == .import {
+                Color.black
+            } else {
+                LinearGradient(
+                    colors: [
+                        Color(hex: gradientTop ?? "#1a1a2e"),
+                        Color(hex: gradientBottom ?? "#16213e")
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        }
     }
 
     var body: some View {
         ZStack {
-            backgroundGradient
+            background
 
             switch mixType {
-            case .video, .photo, .import:
+            case .media:
                 if let thumb = mediaThumbnail {
                     Image(uiImage: thumb)
                         .resizable()
@@ -42,31 +48,62 @@ struct MixCanvasContent: View {
                     textView
                 }
 
-            case .audio:
-                Image(systemName: "speaker.wave.3.fill")
+            case .voice:
+                Image(systemName: "mic.fill")
                     .font(.system(size: 48))
                     .foregroundStyle(.white)
                 if hasText {
                     textView
                 }
 
-            case .embed:
+            case .canvas:
+                // Widgets overlay
+                if let fw = fileWidget {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.white)
+                        if let name = fw.fileName, !name.isEmpty {
+                            Text(name)
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        }
+                    }
+                }
                 if hasText {
                     textView
                 }
 
-            case .text:
+            case .`import`:
+                if let thumb = mediaThumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.white)
+                }
+                if hasText {
+                    textView
+                }
+
+            case .note:
                 if hasText {
                     textView
                 }
             }
 
-            if hasEmbed, let url = embedUrl {
+            // Embed widget card (on any canvas)
+            if let ew = embedWidget, let url = ew.embedUrl {
                 if let embedImg = embedImage {
-                    StaticEmbedCard(urlString: url, og: embedOg, image: embedImg)
+                    StaticEmbedCard(urlString: url, og: ew.embedOg, image: embedImg)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    EmbedCardView(urlString: url, og: embedOg, onTap: nil)
+                    EmbedCardView(urlString: url, og: ew.embedOg, onTap: nil)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }

@@ -43,18 +43,10 @@ final class AudioPlaybackCoordinator: NSObject, AVAudioPlayerDelegate {
 
     // MARK: - Queue from Mixes
 
-    /// Extracts the playable audio URL from a Mix based on its type.
+    /// Extracts the playable audio URL from a Mix.
     /// Every mix should have audio (silence placeholder at minimum via audioUrl).
     static func audioURL(for mix: Mix) -> URL? {
-        let urlString: String? = switch mix.type {
-        case .audio:       mix.audioUrl
-        case .video:       mix.audioUrl
-        case .`import`:    mix.importAudioUrl ?? mix.audioUrl
-        case .text:        mix.ttsAudioUrl ?? mix.audioUrl
-        case .photo:       mix.audioUrl
-        case .embed:       mix.audioUrl
-        }
-        guard let urlString, let url = URL(string: urlString) else { return nil }
+        guard let urlString = mix.audioUrl, let url = URL(string: urlString) else { return nil }
         return url
     }
 

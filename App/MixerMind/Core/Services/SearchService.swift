@@ -1,5 +1,5 @@
 import Foundation
-import SwiftData
+import CoreData
 
 enum SearchService {
 
@@ -8,13 +8,13 @@ enum SearchService {
         let similarity: Double
     }
 
-    /// Perform local semantic search against all mixes in SwiftData.
+    /// Perform local semantic search against all mixes.
     /// Returns mix IDs ranked by cosine similarity to the query.
     static func search(
         query: String,
         tagIds: Set<UUID> = [],
         mixTagMap: [UUID: Set<UUID>] = [:],
-        modelContext: ModelContext,
+        context: NSManagedObjectContext,
         limit: Int = 20
     ) async throws -> [SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -25,8 +25,8 @@ enum SearchService {
         let queryVector = EmbeddingService.decode(queryEmbeddingData)
 
         // 2. Fetch all local mixes that have embeddings
-        let descriptor = FetchDescriptor<LocalMix>()
-        let localMixes = try modelContext.fetch(descriptor)
+        let request = NSFetchRequest<LocalMix>(entityName: "LocalMix")
+        let localMixes = try context.fetch(request)
 
         // 3. Score each mix by cosine similarity
         var scored: [SearchResult] = []

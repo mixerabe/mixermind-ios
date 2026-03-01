@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23231" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithSwiftData="NO">
+    <entity name="LocalMix" representedClassName="LocalMix" customModuleProvider="target" codeGenerationType="none" syncable="YES">
+        <attribute name="mixId" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="type" attributeType="String"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="title" optional="YES" attributeType="String"/>
+        <attribute name="textContent" optional="YES" attributeType="String"/>
+        <attribute name="embedUrl" optional="YES" attributeType="String"/>
+        <attribute name="embedOgJson" optional="YES" attributeType="Binary"/>
+        <attribute name="mediaIsVideo" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="localMediaPath" optional="YES" attributeType="String"/>
+        <attribute name="localMediaThumbnailPath" optional="YES" attributeType="String"/>
+        <attribute name="localEmbedOgImagePath" optional="YES" attributeType="String"/>
+        <attribute name="localAudioPath" optional="YES" attributeType="String"/>
+        <attribute name="localScreenshotPath" optional="YES" attributeType="String"/>
+        <attribute name="previewScaleY" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="previewCropX" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="previewCropY" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="previewCropScale" optional="YES" attributeType="Double" usesScalarValueType="NO"/>
+        <attribute name="gradientTop" optional="YES" attributeType="String"/>
+        <attribute name="gradientBottom" optional="YES" attributeType="String"/>
+        <attribute name="searchContent" optional="YES" attributeType="String"/>
+        <attribute name="localEmbedding" optional="YES" attributeType="Binary"/>
+        <attribute name="fileName" optional="YES" attributeType="String"/>
+        <attribute name="sourceUrl" optional="YES" attributeType="String"/>
+        <attribute name="widgetsJson" optional="YES" attributeType="Binary"/>
+        <attribute name="screenshotBucket" optional="YES" attributeType="String"/>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="mixId"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="LocalTag" representedClassName="LocalTag" customModuleProvider="target" codeGenerationType="none" syncable="YES">
+        <attribute name="tagId" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" attributeType="String"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="tagId"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="LocalMixTag" representedClassName="LocalMixTag" customModuleProvider="target" codeGenerationType="none" syncable="YES">
+        <attribute name="mixId" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="tagId" attributeType="UUID" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="LocalSavedView" representedClassName="LocalSavedView" customModuleProvider="target" codeGenerationType="none" syncable="YES">
+        <attribute name="viewId" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" attributeType="String"/>
+        <attribute name="tagIdsData" attributeType="Binary"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="viewId"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+</model>
